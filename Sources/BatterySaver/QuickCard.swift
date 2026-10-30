@@ -53,71 +53,79 @@ struct QuickCard: View {
         return "\(status.settings.upper)%"
     }
     private var tint: Color {
-        switch model.activity {
-        case .charging: return Color(red: 0.12, green: 0.61, blue: 0.43)
-        case .pluggedIn: return Color(red: 0.16, green: 0.46, blue: 0.85)
-        case .onBattery: return Color(red: 0.82, green: 0.62, blue: 0.08)
-        case .unavailable: return .gray
-        }
+        Color(MenuBarBatteryIcon.color(model.batteryTone))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 7) {
-                Circle().fill(tint).frame(width: 7, height: 7)
-                Text(model.activity.title).font(.system(size: 13, weight: .semibold))
+            HStack {
+                Image(systemName: "battery.75").foregroundColor(tint)
+                Text("Battery Saver").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 if let warning = model.warning {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).help(warning)
                 }
-                Image(systemName: model.sample?.externalPower == true ? "bolt.fill" : "leaf.fill")
-                    .font(.system(size: 14, weight: .medium)).foregroundColor(tint)
             }
-            HStack(spacing: 24) {
-                ZStack {
-                    Circle().stroke(tint.opacity(0.12), lineWidth: 10)
-                    Circle().trim(from: 0, to: CGFloat(model.sample?.percent ?? 0) / 100)
-                        .stroke(AngularGradient(colors: [tint.opacity(0.5), tint], center: .center,
-                                                startAngle: .degrees(0), endAngle: .degrees(360)),
-                                style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    VStack(spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 1) {
-                            Text(model.sample.map { "\($0.percent)" } ?? "—")
-                                .font(.system(size: 43, weight: .medium, design: .rounded)).monospacedDigit()
-                            Text("%").font(.system(size: 18, weight: .medium)).foregroundColor(.secondary)
-                        }
-                        Text("BATTERY").font(.system(size: 9, weight: .semibold)).tracking(1.6).foregroundColor(.secondary)
-                    }
-                }.frame(width: 136, height: 136)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(model.sample.map { "Battery \($0.percent) percent" } ?? "Battery unavailable")
-                VStack(alignment: .leading, spacing: 20) {
-                    metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature")
-                    metric(limit, label: "Charge limit")
+            HStack(spacing: 18) {
+                BatteryRing(model: model, size: 108)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.activity.title).font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(tint.opacity(0.12)))
+                    Text(model.estimate ?? pausedDetail).font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-            }.padding(.vertical, 3)
+            }
+            HStack(spacing: 10) {
+                metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature")
+                metric(limit, label: "Charge limit")
+            }
                 HStack {
                     Text("Settings & details").font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold))
                 }.padding(.horizontal, 14).frame(height: 38)
                     .foregroundColor(colorScheme == .dark ? .black : .white)
-                    .background(colorScheme == .dark ? Color.white.opacity(0.9) : Color(red: 0.13, green: 0.19, blue: 0.17))
+                    .background(colorScheme == .dark ? Color.white.opacity(0.9) : Color(red: 0.04, green: 0.36, blue: 0.24))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .overlay(DetailsActionSurface(action: openDetails))
         }
-        .padding(20).frame(width: 326, height: 280)
+        .padding(20).frame(width: 326, height: 312)
         .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.08 : 0.06), Color(NSColor.windowBackgroundColor)], startPoint: .topLeading, endPoint: .bottomTrailing))
         .background(Color(NSColor.windowBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
+    private var pausedDetail: String {
+        guard let status = model.status, status.isCurrent, status.settings.enabled,
+              status.chargingAllowed == false, status.state.hasPrefix("Paused") else { return "" }
+        return "Resumes at \(status.settings.lower)%"
+    }
+
     private func metric(_ value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value).font(.system(size: 21, weight: .medium, design: .rounded)).monospacedDigit()
-            Text(label).font(.system(size: 10)).foregroundColor(.secondary)
-        }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 11)).foregroundColor(.secondary)
+            Text(value).font(.system(size: 16, weight: .semibold, design: .rounded)).monospacedDigit()
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(NSColor.controlBackgroundColor).opacity(0.7)))
+    }
+}
+
+struct BatteryRing: View {
+    @ObservedObject var model: BatteryModel
+    let size: CGFloat
+    private var tint: Color { Color(MenuBarBatteryIcon.color(model.batteryTone)) }
+    var body: some View {
+        ZStack {
+            Circle().stroke(tint.opacity(0.13), lineWidth: size * 0.075)
+            Circle().trim(from: 0, to: CGFloat(min(100, max(0, model.sample?.percent ?? 0))) / 100)
+                .stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text(model.sample.map { "\($0.percent)%" } ?? "—")
+                .font(.system(size: size * 0.25, weight: .semibold, design: .rounded)).monospacedDigit()
+        }.padding(size * 0.05).frame(width: size, height: size)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(model.sample.map { "Battery \($0.percent) percent" } ?? "Battery unavailable")
     }
 }

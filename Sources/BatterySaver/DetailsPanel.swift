@@ -25,13 +25,26 @@ struct Panel: View {
             }
             overview
             HStack(alignment: .top, spacing: 14) {
-                protection.frame(maxWidth: .infinity)
+                protection.id(model.draftResetID).frame(maxWidth: .infinity)
                 VStack(spacing: 14) {
                     health
                     calibration
                 }.frame(maxWidth: .infinity)
             }
-            service
+            HStack(spacing: 16) {
+                Toggle("Start at login", isOn: Binding(get: { model.startAtLogin }, set: { model.setStartAtLogin($0) }))
+                    .toggleStyle(.switch).fixedSize()
+                Divider().frame(height: 28)
+                Circle().fill(model.status?.isCurrent == true ? green : .gray).frame(width: 7, height: 7)
+                Text(model.status?.isCurrent == true ? "Helper active" : "Helper needs attention").font(.caption)
+                Spacer(minLength: 0)
+                if model.helperInstalled {
+                    Button("Manage helper…") { showUninstall = true }.disabled(model.saving)
+                } else {
+                    Button("Install helper…") { model.installHelper() }.disabled(model.saving)
+                }
+            }.padding(12).background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
+            actions
             HStack {
                 Label("Runs quietly in your menu bar", systemImage: "leaf")
                     .font(.caption).foregroundColor(.secondary)
@@ -41,10 +54,10 @@ struct Panel: View {
             }
         }
         .padding(18)
-        .frame(width: 600)
+        .frame(width: 680)
         .background(Color(NSColor.windowBackgroundColor))
         .accentColor(green)
-        .controlSize(.small)
+        .controlSize(.regular)
         .alert("Start battery calibration?", isPresented: $showCalibration) {
             Button("Cancel", role: .cancel) {}
             Button("Start calibration") { model.authorize(["--calibrate"]) }
@@ -76,10 +89,14 @@ struct Panel: View {
     private var overview: some View {
         card {
             HStack(alignment: .center, spacing: 18) {
-                Text(model.sample.map { "\($0.percent)%" } ?? "—")
-                    .font(.system(size: 44, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-                Text(model.activity.title).font(.callout).fontWeight(.medium).lineLimit(2)
+                BatteryRing(model: model, size: 76)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(model.activity.title).font(.callout).fontWeight(.medium).lineLimit(2)
+                    if let estimate = model.estimate {
+                        Label(estimate, systemImage: "clock").font(.caption).foregroundColor(.secondary)
+                            .help("Approximate: workload, current and charge taper can change the remaining time.")
+                    }
+                }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 5) {
                     Text(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—")
@@ -104,15 +121,28 @@ struct Panel: View {
                 if let status = model.status, status.isCurrent, status.settings.enabled, status.state.hasPrefix("Cooling") {
                     Text("Charging paused while the battery cools.").font(.caption).foregroundColor(.orange)
                 }
-                HStack {
-                    Text(model.hasDraft ? "Unapplied changes" : "Settings up to date")
-                        .font(.caption).foregroundColor(model.hasDraft ? .orange : .secondary)
-                    Spacer(minLength: 0)
-                }
-                Button(model.saving ? "Applying…" : "Apply settings…") { model.save() }
-                    .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
-                    .disabled(!model.helperInstalled)
+                Divider()
+                sleepBehavior
             }.disabled(model.saving)
+        }
+    }
+
+    private var sleepBehavior: some View {
+        Group {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Stay awake until charge limit", isOn: model.draft(\.keepAwakeUntilLimit))
+                    .disabled(model.status?.sleepControlAvailable != true || !model.helperInstalled || model.saving)
+                    .font(.callout).toggleStyle(.switch)
+                Text(model.status?.sleepControlAvailable == true
+                     ? "Allows lid-closed charging; releases sleep at the limit or on unplug. The display can sleep."
+                     : "Update the helper to enable lid-closed charging.")
+                    .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .help("Releases on heat/errors, after 8 hours, or after 30 minutes without charge progress. Restores only the system sleep setting acquired by this helper.")
+                if let message = model.status?.sleepMessage {
+                    Text(message).font(.caption).foregroundColor(model.status?.sleepHeld == true ? green : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -148,40 +178,31 @@ struct Panel: View {
                     .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button("Calibrate…") { showCalibration = true }
                     .disabled(!model.protectionVerified || model.status?.calibrationActive == true || model.saving)
-                Button("Cancel calibration") { model.authorize(["--cancel-calibration"]) }
-                    .font(.caption)
-                    .disabled(model.status?.isCurrent != true || model.status?.calibrationActive != true || model.saving)
+                if model.status?.isCurrent == true && model.status?.calibrationActive == true {
+                    Button("Cancel calibration") { model.authorize(["--cancel-calibration"]) }
+                        .disabled(model.saving)
+                }
             }
         }
     }
 
-    private var service: some View {
-        HStack(spacing: 10) {
-            Image(systemName: model.helperInstalled ? "checkmark.shield" : "shield")
-                .foregroundColor(model.helperInstalled ? green : .secondary).font(.title3)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.helperInstalled ? "Background helper installed" : "Enable battery protection")
-                    .font(.callout).fontWeight(.medium)
-                Text(model.helperInstalled ? "The helper keeps running when you quit this app." : "Install helper with administrator approval.")
-                    .font(.caption).foregroundColor(.secondary)
-            }
-            Spacer(minLength: 0)
-            if model.helperInstalled {
-                Button("Remove…") { showUninstall = true }
-                    .help("Restore normal charging and remove the background helper.")
-                    .disabled(model.saving)
-            } else {
-                Button("Install helper…") { model.installHelper() }.disabled(model.saving)
-            }
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(green.opacity(0.07)))
+    private var actions: some View {
+        HStack {
+            Text(model.hasDraft ? "Unapplied changes" : "Settings up to date")
+                .font(.caption).foregroundColor(model.hasDraft ? .orange : .secondary)
+            Spacer()
+            Button("Discard changes") { model.discardChanges() }
+                .disabled((!model.hasDraft && model.inputErrors.isEmpty) || model.saving || model.awaitingSettings)
+            Button(model.saving ? "Applying…" : "Apply changes…") { model.save() }
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.helperInstalled || !model.hasDraft || model.saving || model.awaitingSettings)
+        }.padding(.vertical, 6)
     }
 
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(16)
             .background(RoundedRectangle(cornerRadius: 14).fill(Color(NSColor.controlBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.06), lineWidth: 1))
     }

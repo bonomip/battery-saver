@@ -23,7 +23,7 @@ expected_health = registry["AppleRawMaxCapacity"] / registry["DesignCapacity"] *
 assert abs(sample["healthPercent"] - expected_health) < 1, "Capacity estimate mismatch"
 print("PASS: live charge, AC state, temperature, cycles and capacity agree with ioreg.")
 
-for args in (["--configure", "1", "75", "80", "38", "35"], ["--unknown"]):
+for args in (["--configure", "1", "75", "80", "38", "35"], ["--restore-sleep"], ["--unknown"]):
     denied = subprocess.run([helper] + args, capture_output=True, text=True)
     assert denied.returncode != 0, f"Invalid/unprivileged operation was accepted: {args}"
 print("PASS: unprivileged settings changes and unknown commands are rejected.")

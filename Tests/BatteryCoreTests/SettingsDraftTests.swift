@@ -6,6 +6,21 @@ final class SettingsDraftTests: XCTestCase {
         HelperStatus(date: date, state: "Paused", error: error, settings: settings, sample: nil, backend: "Mock", chargingAllowed: false)
     }
 
+    func testDiscardRestoresAppliedValuesWithoutWriting() throws {
+        let applied = Settings(lower: 75, upper: 80)
+        var draft = SettingsDraft(settings: applied)
+        draft.edit(\.lower, to: 90)
+        draft.discard()
+        XCTAssertEqual(draft.settings, applied)
+        XCTAssertFalse(draft.edited)
+        XCTAssertNil(draft.pendingSettings)
+        draft.edit(\.lower, to: 70)
+        _ = try draft.beginApply()
+        draft.discard()
+        XCTAssertEqual(draft.settings.lower, 70)
+        XCTAssertNotNil(draft.pendingSettings)
+    }
+
     func testAcknowledgementPreservesEditsMadeDuringAuthorization() throws {
         var draft = SettingsDraft(settings: Settings())
         let submitted = try draft.beginApply()

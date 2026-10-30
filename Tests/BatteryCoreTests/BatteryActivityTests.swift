@@ -2,6 +2,37 @@ import XCTest
 @testable import BatteryCore
 
 final class BatteryActivityTests: XCTestCase {
+    func testLowBatteryBoundaryAndChargingPriority() {
+        for activity in [BatteryActivity.onBattery, .pluggedIn] {
+            XCTAssertEqual(activity.tone(percent: 15), activity == .pluggedIn ? .blue : .yellow)
+            XCTAssertEqual(activity.tone(percent: 14), .red)
+            XCTAssertEqual(activity.tone(percent: 0), .red)
+        }
+        XCTAssertEqual(BatteryActivity.onBattery.tone(percent: 16), .yellow)
+        XCTAssertEqual(BatteryActivity.pluggedIn.tone(percent: 16), .blue)
+        XCTAssertEqual(BatteryActivity.charging.tone(percent: 15), .green)
+        XCTAssertEqual(BatteryActivity.charging.tone(percent: 0), .green)
+    }
+    func testColorBoundariesAndWeakAdapterWarning() {
+        for percent in [45, 46, 100] {
+            XCTAssertEqual(BatteryActivity.onBattery.tone(percent: percent), .neutral)
+        }
+        for percent in [15, 16, 44] {
+            XCTAssertEqual(BatteryActivity.onBattery.tone(percent: percent), .yellow)
+        }
+        for percent in [0, 14, 15, 44, 45, 100] {
+            XCTAssertEqual(BatteryActivity.charging.tone(percent: percent), .green)
+            XCTAssertEqual(BatteryActivity.pluggedIn.tone(percent: percent), percent < 15 ? .red : .blue)
+            XCTAssertEqual(BatteryActivity.pluggedInDraining.tone(percent: percent), percent < 15 ? .red : .yellow)
+        }
+    }
+
+    func testUnavailableOrInvalidChargeNeverShowsLowOrChargingColor() {
+        XCTAssertEqual(BatteryActivity.unavailable.tone(percent: 15), .gray)
+        for percent in [nil, -1, 101] as [Int?] {
+            XCTAssertEqual(BatteryActivity.charging.tone(percent: percent), .gray)
+        }
+    }
     private func sample(connected: Bool, charging: Bool) -> BatterySample {
         BatterySample(date: Date(), percent: 68, temperature: 26, externalPower: connected,
                       charging: charging, currentMA: nil, voltageMV: nil, cycles: 432, healthPercent: 86)

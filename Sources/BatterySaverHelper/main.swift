@@ -31,6 +31,7 @@ func conflicts() throws -> Bool {
 }
 let requestPath = Locations.directory + "/calibration-request.json"
 let recoveryPath = Locations.directory + "/adapter-recovery.json"
+let sleepRecoveryPath = Locations.directory + "/sleep-recovery.json"
 
 func readCalibrationCommand() -> CalibrationCommand? {
     (try? Data(contentsOf: URL(fileURLWithPath: requestPath))).flatMap {
@@ -40,9 +41,14 @@ func readCalibrationCommand() -> CalibrationCommand? {
 
 final class Daemon {
     let controller: HelperController
+    let sleepGuard: ChargingSleepGuard
     var signals: [DispatchSourceSignal] = []
     var timer: Timer?
     init() throws {
+        let sleepStore = AdapterRecoveryStore(path: sleepRecoveryPath)
+        sleepGuard = ChargingSleepGuard(hardware: PMSetSleepSetting(), recoveryRequired: try sleepStore.read(),
+                                       persistRecovery: sleepStore.write)
+        try sleepGuard.recover()
         let recoveryStore = AdapterRecoveryStore(path: recoveryPath)
         let needsRecovery = try recoveryStore.read()
         let gate = try ChargeGate()
@@ -53,9 +59,24 @@ final class Daemon {
                                       adapterRecoveryRequired: needsRecovery,
                                       persistAdapterRecovery: recoveryStore.write)
     }
-    func publish(_ status: HelperStatus) {
-        do { try writeJSON(status, path: Locations.status) }
+    @discardableResult func publish(_ status: HelperStatus) -> HelperStatus {
+        var output = status
+        output.sleepControlAvailable = true
+        do { try sleepGuard.update(status: status) }
+        catch {
+            var message = error.localizedDescription
+            do { try sleepGuard.release() }
+            catch { message += " Sleep restoration also failed: \(error.localizedDescription)" }
+            output.error = [status.error, message].compactMap { $0 }.joined(separator: "; ")
+            output.sleepMessage = message
+        }
+        output.sleepHeld = sleepGuard.isHolding
+        if output.sleepHeld && output.sleepMessage == nil {
+            output.sleepMessage = "Keeping awake until \(status.settings.upper)%"
+        }
+        do { try writeJSON(output, path: Locations.status) }
         catch { fputs("Status write failed: \(error.localizedDescription)\n", stderr) }
+        return output
     }
     func power(_ sleeping: Bool) { publish(sleeping ? controller.sleep() : controller.wake()) }
     func run() throws {
@@ -70,7 +91,7 @@ final class Daemon {
             signal(signalNumber, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
             source.setEventHandler { [self] in
-                let stopped = controller.stop(); publish(stopped)
+                let stopped = publish(controller.stop())
                 bs_power_stop(); exit(stopped.error == nil ? 0 : 1)
             }
             source.resume(); signals.append(source)
@@ -93,6 +114,15 @@ do {
     case "--battery-json":
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         print(String(decoding: try encoder.encode(BatteryReader.read()), as: UTF8.self))
+    case "--sleep-status":
+        print("SleepDisabled: \(try PMSetSleepSetting().isSleepDisabled() ? 1 : 0)")
+    case "--restore-sleep":
+        try checkRootDirectory()
+        let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
+        defer { withExtendedLifetime(lock) {} }
+        let store = AdapterRecoveryStore(path: sleepRecoveryPath)
+        try ChargingSleepGuard(hardware: PMSetSleepSetting(), recoveryRequired: store.read(), persistRecovery: store.write).recover()
+        print("Any saved Battery Saver sleep hold was restored. Charging settings were not changed.")
     case "--daemon":
         try checkRootDirectory()
         // Only the lock holder may open hardware or publish daemon status.
@@ -108,11 +138,16 @@ do {
         }
     case "--configure":
         try checkRootDirectory()
-        guard arguments.count == 6, let enabled = Int(arguments[1]), [0, 1].contains(enabled),
+        guard (arguments.count == 6 || arguments.count == 7), let enabled = Int(arguments[1]), [0, 1].contains(enabled),
               let lower = Int(arguments[2]), let upper = Int(arguments[3]), let pause = Double(arguments[4]), let resume = Double(arguments[5]) else {
-            throw SaverError("Usage: --configure 0|1 lower upper pauseTemperature resumeTemperature")
+            throw SaverError("Usage: --configure 0|1 lower upper pauseTemperature resumeTemperature [keepAwakeUntilLimit:0|1]")
         }
-        let settings = Settings(enabled: enabled == 1, lower: lower, upper: upper, heatPause: pause, heatResume: resume)
+        let keepAwake: Bool
+        if arguments.count == 7 {
+            guard let value = Int(arguments[6]), [0, 1].contains(value) else { throw SaverError("Keep-awake setting must be 0 or 1.") }
+            keepAwake = value == 1
+        } else { keepAwake = (try? Locations.readSettings().keepAwakeUntilLimit) ?? true }
+        let settings = Settings(enabled: enabled == 1, lower: lower, upper: upper, heatPause: pause, heatResume: resume, keepAwakeUntilLimit: keepAwake)
         try settings.validate()
         if settings.enabled { if try conflicts() { throw SaverError("AlDente or another controller is running. Stop it before activating Battery Saver.") } }
         try writeJSON(settings, path: Locations.settings)
@@ -128,6 +163,9 @@ do {
         // Standalone restoration cannot race a running calibration tick.
         let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
         defer { withExtendedLifetime(lock) {} }
+        let sleepStore = AdapterRecoveryStore(path: sleepRecoveryPath)
+        try ChargingSleepGuard(hardware: PMSetSleepSetting(), recoveryRequired: sleepStore.read(),
+                               persistRecovery: sleepStore.write).recover()
         guard try !conflicts() else { throw SaverError("Another charging controller is running. Stop it before restoring hardware gates.") }
         try writeJSON(Settings(enabled: false), path: Locations.settings)
         try writeJSON(CalibrationCommand(start: false), path: requestPath)

@@ -1,5 +1,13 @@
 # Verification record
 
+Latest addition: the approved keep-awake-until-limit mode has143 passing tests
+in debug and release, including ownership, restoration, failure, timeout,
+configuration migration and fixed-command backend checks. The actual system
+setting was read independently through IOKit as0; no real sleep-disable write
+or physical lid-closed charging test was performed by the development tools.
+Release packaging/signatures and new settings layouts passed. See
+Verification/charge-sleep-*.log and MANUAL_TESTS.md for deployment acceptance.
+
 Interactive acceptance progress is tracked in [MANUAL_TESTS.md](MANUAL_TESTS.md).
 After the Test 1 notification/label change, all 85 debug tests, live sensor comparison,
 permission rejection checks and release packaging/signature checks passed again.

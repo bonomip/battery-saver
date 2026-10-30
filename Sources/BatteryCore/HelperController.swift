@@ -95,7 +95,9 @@ public final class HelperController {
                       error: detail, allowed: detail == nil ? !settings.enabled : nil)
     }
     public func wake() -> HelperStatus {
-        sleeping = false; session.resetPolicy(); return tick()
+        // Sleep pauses the hardware, not the charge cycle. Preserve its
+        // hysteresis latch, then recheck current limits, heat and ownership.
+        sleeping = false; return tick()
     }
     public func stop() -> HelperStatus {
         running = false

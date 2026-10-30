@@ -15,6 +15,8 @@ private final class LifecycleEnvironment {
     var command: CalibrationCommand?
     var settingsReads = 0
     var adapterRecoveryRequired = false
+    var percent = 50
+    var temperature: Double = 25
     func readSettings() throws -> Settings {
         settingsReads += 1
         if settingsFail { throw SaverError("Invalid settings") }
@@ -25,7 +27,7 @@ private final class LifecycleEnvironment {
         return conflict
     }
     func sample() -> BatterySample {
-        BatterySample(date: Date(), percent: 50, temperature: 25, externalPower: true, charging: true, currentMA: 1000, voltageMV: 12000, cycles: 1, healthPercent: 90)
+        BatterySample(date: Date(), percent: percent, temperature: temperature, externalPower: true, charging: true, currentMA: 1000, voltageMV: 12000, cycles: 1, healthPercent: 90)
     }
     func controller(_ hardware: LifecycleHardware) -> HelperController {
         HelperController(hardware: hardware, backend: "test", existingCommand: command,
@@ -37,6 +39,37 @@ private final class LifecycleEnvironment {
 }
 
 final class HelperControllerTests: XCTestCase {
+    func testWakeResumesInterruptedChargeInsideTheSailingRange() {
+        let env = LifecycleEnvironment(); let hardware = LifecycleHardware()
+        env.percent = 75
+        let controller = env.controller(hardware)
+        XCTAssertEqual(controller.tick().chargingAllowed, true)
+        env.percent = 77
+        XCTAssertEqual(controller.tick().chargingAllowed, true)
+        XCTAssertEqual(controller.sleep().chargingAllowed, false)
+        XCTAssertEqual(controller.wake().chargingAllowed, true)
+        XCTAssertEqual(hardware.operations.last, "charge:true")
+    }
+    func testWakeDoesNotTopUpAnAlreadyPausedBatteryInTheRange() {
+        let env = LifecycleEnvironment(); let hardware = LifecycleHardware()
+        env.percent = 80
+        let controller = env.controller(hardware)
+        XCTAssertEqual(controller.tick().chargingAllowed, false)
+        env.percent = 77
+        _ = controller.sleep()
+        XCTAssertEqual(controller.wake().chargingAllowed, false)
+    }
+    func testWakeStillHonorsNewUpperLimitAndTemperature() {
+        for hot in [false, true] {
+            let env = LifecycleEnvironment(); let hardware = LifecycleHardware()
+            let controller = env.controller(hardware)
+            XCTAssertEqual(controller.tick().chargingAllowed, true)
+            _ = controller.sleep()
+            if hot { env.temperature = 39 }
+            else { env.percent = 81 }
+            XCTAssertEqual(controller.wake().chargingAllowed, false)
+        }
+    }
     func testConflictPreventsRecoveryEvenWhenSettingsAreCorrupt() {
         let env = LifecycleEnvironment(); let hardware = LifecycleHardware()
         env.conflict = true; env.settingsFail = true

@@ -20,8 +20,12 @@ First target: macOS 12.6.5, MacBookPro17,1, firmware 8419.80.7.
   app policy, not Apple-specified battery safety limits.
 - Show charge, temperature, and why charging is allowed or paused.
 - Maintain protection independently of the menu bar window and after login.
-- Handle sleep and wake without keeping the Mac awake. Legacy hardware may
-  need charging paused before sleep and the policy reevaluated on wake.
+- At Paolo's request, optionally keep the Mac awake while plugged in and
+  charging toward its upper limit, allowing the display to sleep. Restore sleep
+  at the limit, on unplug, on paused/error states and when the helper stops.
+  Persist recovery intent and bound the hold by time and charge progress.
+  Actual sleep pauses legacy charging; wake preserves the interrupted cycle.
+  Firmware-based enforcement during genuine sleep is deferred in TODO.md.
 - Include an explicit restore-normal-charging and uninstall path.
 - Reject activation while another charging controller owns control.
 - Validate missing/stale sensor data and unsupported controls; show an error

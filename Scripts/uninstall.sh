@@ -17,6 +17,6 @@ fi
 "$helper" --restore
 /bin/rm -f "/Library/LaunchDaemons/$label.plist"
 # Only known files are removed; preserve unexpected contents for inspection.
-/bin/rm -f "$dir/settings.json" "$dir/status.json" "$dir/calibration-request.json" "$dir/adapter-recovery.json" "$dir/daemon.lock" "$helper"
+/bin/rm -f "$dir/settings.json" "$dir/status.json" "$dir/calibration-request.json" "$dir/adapter-recovery.json" "$dir/sleep-recovery.json" "$dir/daemon.lock" "$helper"
 /bin/rmdir "$dir"
 print 'Helper removed; normal macOS charging restored.'

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Keeps an editable draft separate from the configuration awaiting helper acknowledgement.
-public struct SettingsDraft {
+public struct SettingsDraft: Equatable {
     public private(set) var settings: Settings
     public private(set) var appliedSettings: Settings
     public private(set) var edited = false
@@ -17,6 +17,13 @@ public struct SettingsDraft {
         settings[keyPath: keyPath] = value
         revision += 1
         edited = true
+    }
+
+    public mutating func discard() {
+        guard pendingSettings == nil else { return }
+        settings = appliedSettings
+        edited = false
+        revision += 1
     }
 
     public mutating func beginApply() throws -> Settings {

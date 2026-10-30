@@ -12,9 +12,23 @@ public struct Settings: Codable, Equatable {
     public var upper: Int
     public var heatPause: Double
     public var heatResume: Double
-    public init(enabled: Bool = true, lower: Int = 75, upper: Int = 80, heatPause: Double = 38, heatResume: Double = 35) {
+    public var keepAwakeUntilLimit: Bool
+    public init(enabled: Bool = true, lower: Int = 75, upper: Int = 80, heatPause: Double = 38, heatResume: Double = 35, keepAwakeUntilLimit: Bool = true) {
         self.enabled = enabled; self.lower = lower; self.upper = upper
         self.heatPause = heatPause; self.heatResume = heatResume
+        self.keepAwakeUntilLimit = keepAwakeUntilLimit
+    }
+    private enum CodingKeys: String, CodingKey {
+        case enabled, lower, upper, heatPause, heatResume, keepAwakeUntilLimit
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        lower = try values.decode(Int.self, forKey: .lower)
+        upper = try values.decode(Int.self, forKey: .upper)
+        heatPause = try values.decode(Double.self, forKey: .heatPause)
+        heatResume = try values.decode(Double.self, forKey: .heatResume)
+        keepAwakeUntilLimit = try values.contains(.keepAwakeUntilLimit) ? values.decode(Bool.self, forKey: .keepAwakeUntilLimit) : true
     }
     public func validate() throws {
         guard lower >= 20, upper <= 100, lower < upper,
@@ -25,7 +39,7 @@ public struct Settings: Codable, Equatable {
     }
 }
 
-public struct BatterySample: Codable {
+public struct BatterySample: Codable, Equatable {
     public var date: Date
     public let percent: Int
     public let temperature: Double
@@ -70,7 +84,7 @@ public struct ChargePolicy {
     }
 }
 
-public struct HelperStatus: Codable {
+public struct HelperStatus: Codable, Equatable {
     public var date: Date
     public var state: String
     public var error: String?
@@ -80,12 +94,37 @@ public struct HelperStatus: Codable {
     public var chargingAllowed: Bool?
     public var calibrationActive: Bool
     public var running: Bool
+    public var sleepControlAvailable: Bool
+    public var sleepHeld: Bool
+    public var sleepMessage: String?
     public var isCurrent: Bool { running && error == nil && (-5...30).contains(Date().timeIntervalSince(date)) }
-    public init(date: Date = Date(), state: String, error: String?, settings: Settings, sample: BatterySample?, backend: String, chargingAllowed: Bool?, calibrationActive: Bool = false, running: Bool = true) {
+    public init(date: Date = Date(), state: String, error: String?, settings: Settings, sample: BatterySample?, backend: String, chargingAllowed: Bool?, calibrationActive: Bool = false, running: Bool = true, sleepControlAvailable: Bool = false, sleepHeld: Bool = false, sleepMessage: String? = nil) {
         self.date = date; self.state = state; self.error = error; self.settings = settings
         self.sample = sample; self.backend = backend; self.chargingAllowed = chargingAllowed
         self.calibrationActive = calibrationActive
         self.running = running
+        self.sleepControlAvailable = sleepControlAvailable
+        self.sleepHeld = sleepHeld
+        self.sleepMessage = sleepMessage
+    }
+    private enum CodingKeys: String, CodingKey {
+        case date, state, error, settings, sample, backend, chargingAllowed, calibrationActive, running
+        case sleepControlAvailable, sleepHeld, sleepMessage
+    }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        date = try values.decode(Date.self, forKey: .date)
+        state = try values.decode(String.self, forKey: .state)
+        error = try values.decodeIfPresent(String.self, forKey: .error)
+        settings = try values.decode(Settings.self, forKey: .settings)
+        sample = try values.decodeIfPresent(BatterySample.self, forKey: .sample)
+        backend = try values.decode(String.self, forKey: .backend)
+        chargingAllowed = try values.decodeIfPresent(Bool.self, forKey: .chargingAllowed)
+        calibrationActive = try values.decode(Bool.self, forKey: .calibrationActive)
+        running = try values.decode(Bool.self, forKey: .running)
+        sleepControlAvailable = try values.contains(.sleepControlAvailable) ? values.decode(Bool.self, forKey: .sleepControlAvailable) : false
+        sleepHeld = try values.contains(.sleepHeld) ? values.decode(Bool.self, forKey: .sleepHeld) : false
+        sleepMessage = try values.decodeIfPresent(String.self, forKey: .sleepMessage)
     }
 }
 

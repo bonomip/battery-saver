@@ -2,25 +2,36 @@ import AppKit
 import SwiftUI
 import BatteryCore
 import IOKit.ps
+import Darwin
 
 final class BatteryModel: ObservableObject {
-    @Published var sample: BatterySample?
-    @Published var status: HelperStatus?
+    var sample: BatterySample?
+    var status: HelperStatus?
     @Published var error: String?
     @Published private var settingsDraft = SettingsDraft()
     var settings: BatteryCore.Settings { settingsDraft.settings }
     @Published var saving = false
     @Published var inputErrors: Set<String> = []
+    @Published private(set) var startAtLogin = false
+    @Published var draftResetID = 0
+    var awaitingSettings: Bool { settingsDraft.pendingSettings != nil }
     var hasDraft: Bool { settingsDraft.edited }
     var timer: Timer?
+    var isInterfaceVisible: () -> Bool = { true }
+    private var lastDisplay: DisplaySnapshot?
+    private var insights = BatteryInsights()
+    private var insight: BatteryInsightResult?
+    private var insightDate: Date?
     private var powerSource: CFRunLoopSource?
     var onRefresh: (() -> Void)?
     var readError: String?
     var helperInstalled: Bool { FileManager.default.fileExists(atPath: Locations.helper) }
     var protectionVerified: Bool { helperInstalled && sample != nil && status?.isCurrent == true && status?.settings.enabled == true }
     init() {
+        startAtLogin = LoginStartup().isEnabled(app: Bundle.main.bundleURL)
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
+        timer?.tolerance = 0.5
         if let timer = timer { RunLoop.main.add(timer, forMode: .common) }
         // React to macOS power changes without increasing periodic polling.
         powerSource = IOPSNotificationCreateRunLoopSource({ context in
@@ -38,14 +49,57 @@ final class BatteryModel: ObservableObject {
             CFRunLoopSourceInvalidate(source)
         }
     }
-    func refresh() {
-        do { sample = try BatteryReader.read(); readError = nil } catch { sample = nil; readError = error.localizedDescription }
+    func refresh(forcePublish: Bool = false) {
         status = (try? Data(contentsOf: URL(fileURLWithPath: Locations.status))).flatMap { try? JSONDecoder().decode(HelperStatus.self, from: $0) }
-        if let message = settingsDraft.refresh(status: status) { error = message }
-        if !FileManager.default.fileExists(atPath: Locations.helper) { settingsDraft.helperUnavailable() }
+        do {
+            let reading = try BatteryReader.readSnapshot()
+            acceptReading(sample: reading.sample, telemetry: reading.telemetry)
+            readError = nil
+        } catch { sample = nil; insight = nil; insightDate = nil; readError = error.localizedDescription }
+        var draft = settingsDraft
+        if let message = draft.refresh(status: status) { error = message }
+        if !helperInstalled { draft.helperUnavailable() }
+        if draft != settingsDraft { settingsDraft = draft }
+        let display = DisplaySnapshot(sample: sample, status: status, helperInstalled: helperInstalled,
+            warning: warning, activity: activity.title, estimate: estimate)
+        if forcePublish || display != lastDisplay {
+            if isInterfaceVisible() { objectWillChange.send() }
+            lastDisplay = display
+        }
         onRefresh?()
     }
-    var activity: BatteryActivity { BatteryActivity(sample: sample) }
+    func acceptReading(sample: BatterySample, telemetry: BatteryTelemetry, now: Date = Date(), uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        self.sample = sample
+        let target: Int
+        if helperInstalled && status?.isCurrent != true { target = 0 }
+        else if let status = status, status.settings.enabled && !status.calibrationActive { target = status.settings.upper }
+        else { target = 100 }
+        insight = insights.update(sample: sample, telemetry: telemetry, targetPercent: target, now: now, uptime: uptime)
+        insightDate = sample.date
+    }
+    var activity: BatteryActivity { sample?.date == insightDate ? (insight?.activity ?? BatteryActivity(sample: sample)) : BatteryActivity(sample: sample) }
+    var estimate: String? { sample?.date == insightDate ? insight?.estimate : nil }
+    var batteryTone: BatteryTone { activity.tone(percent: sample?.percent) }
+    func discardChanges() {
+        guard !saving, !awaitingSettings else { return }
+        settingsDraft.discard()
+        draftResetID += 1
+        inputErrors.removeAll()
+        error = nil
+    }
+    func configureLoginStartup() {
+        let preferences = UserDefaults.standard
+        if preferences.object(forKey: "startAtLogin") == nil || preferences.bool(forKey: "startAtLogin") {
+            setStartAtLogin(true)
+        }
+    }
+    func setStartAtLogin(_ enabled: Bool) {
+        do {
+            try LoginStartup().setEnabled(enabled, app: Bundle.main.bundleURL)
+            startAtLogin = LoginStartup().isEnabled(app: Bundle.main.bundleURL)
+            UserDefaults.standard.set(enabled, forKey: "startAtLogin")
+        } catch { self.error = "Start at login: \(error.localizedDescription)" }
+    }
     var state: String { activity.title }
     var warning: String? {
         if let error = error { return error }
@@ -103,7 +157,9 @@ final class BatteryModel: ObservableObject {
         guard inputErrors.isEmpty else { error = "Enter whole-number percentages in the allowed ranges before applying."; return }
         let submitted: BatteryCore.Settings
         do { submitted = try settingsDraft.beginApply() } catch { self.error = error.localizedDescription; return }
-        runAuthorized(executable: Locations.helper, arguments: ["--configure", submitted.enabled ? "1" : "0", "\(submitted.lower)", "\(submitted.upper)", "\(submitted.heatPause)", "\(submitted.heatResume)"], configuration: true)
+        var arguments = ["--configure", submitted.enabled ? "1" : "0", "\(submitted.lower)", "\(submitted.upper)", "\(submitted.heatPause)", "\(submitted.heatResume)"]
+        if status?.sleepControlAvailable == true { arguments.append(submitted.keepAwakeUntilLimit ? "1" : "0") }
+        runAuthorized(executable: Locations.helper, arguments: arguments, configuration: true)
     }
 }
 
@@ -117,16 +173,15 @@ struct ChargeThresholdControl: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
-                Spacer()
+                Slider(value: Binding(get: { Double(value) }, set: {
+                    value = Int($0.rounded()); text = "\(value)"; inputErrors.remove(title)
+                }), in: Double(range.lowerBound)...Double(range.upperBound))
+                    .accessibilityLabel(title)
                 TextField(title, text: $text)
-                    .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 58)
+                    .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 48)
                     .accessibilityLabel("\(title) percentage")
                 Text("%")
-            }
-            Slider(value: Binding(get: { Double(value) }, set: {
-                value = Int($0.rounded()); text = "\(value)"; inputErrors.remove(title)
-            }), in: Double(range.lowerBound)...Double(range.upperBound))
-                .accessibilityLabel(title)
+            }.padding(.vertical, 7)
             if inputErrors.contains(title) {
                 Text("Enter a whole number from \(range.lowerBound) to \(range.upperBound)%.")
                     .font(.caption).foregroundColor(.red)
@@ -145,13 +200,21 @@ struct ChargeThresholdControl: View {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     var item: NSStatusItem!
     let menu = NSMenu()
     var settingsWindow: NSWindow?
+    private var menuTracking = false
+    private var cardEntry: NSMenuItem?
+    private var lastIconKey: String?
     let model = BatteryModel()
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        model.configureLoginStartup()
+        model.isInterfaceVisible = { [weak self] in
+            guard let self = self else { return false }
+            return self.menuTracking || self.settingsWindow?.isVisible == true
+        }
         // Supply standard editing shortcuts for keyboard entry in the settings window.
         let mainMenu = NSMenu()
         let editEntry = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
@@ -166,48 +229,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Native menu tracking owns menu-bar visibility, including fullscreen Spaces.
         menu.autoenablesItems = false
         menu.delegate = self
-        let card = QuickCardHost(rootView: QuickCard(model: model) { [weak self] in
-            self?.menu.cancelTracking()
-            DispatchQueue.main.async { self?.openSettings() }
-        })
-        // Keep geometry fixed during tracking; the read-only card has no keyboard fields.
-        card.frame = NSRect(x: 0, y: 0, width: 326, height: 280)
         let entry = NSMenuItem(title: "Settings & details", action: #selector(openSettings), keyEquivalent: "")
-        entry.target = self; entry.view = card
+        entry.target = self
+        cardEntry = entry
         menu.addItem(entry)
         item.menu = menu
         model.onRefresh = { [weak self] in self?.update() }; update()
     }
     func update() {
-        item.button?.title = model.sample.map { "\($0.percent)%" } ?? "—"
-        item.button?.image = NSImage(systemSymbolName: model.protectionVerified ? "leaf.fill" : "battery.100", accessibilityDescription: "Battery Saver")
-        item.button?.imagePosition = .imageLeading
-        item.button?.toolTip = model.state
+        guard let button = item.button else { return }
+        let title = model.sample.map { "\($0.percent)%" } ?? "—"
+        if !button.title.isEmpty { button.title = "" }
+        let appearance = button.effectiveAppearance
+        let key = "\(title)|\(model.activity.title)|\(model.batteryTone)|\(appearance.name.rawValue)"
+        if key != lastIconKey {
+            button.image = MenuBarBatteryIcon.image(percent: model.sample?.percent, activity: model.activity,
+                tone: model.batteryTone, appearance: appearance)
+            button.imagePosition = .imageOnly
+            lastIconKey = key
+        }
+        if button.toolTip != model.state { button.toolTip = model.state }
     }
-    func menuWillOpen(_ menu: NSMenu) { model.refresh() }
+    func menuWillOpen(_ menu: NSMenu) {
+        menuTracking = true
+        model.refresh(forcePublish: true)
+        let card = QuickCardHost(rootView: QuickCard(model: model) { [weak self] in
+            self?.menu.cancelTracking()
+            DispatchQueue.main.async { self?.openSettings() }
+        })
+        // Keep geometry fixed during tracking, including while the estimate settles.
+        card.frame = NSRect(x: 0, y: 0, width: 326, height: 312)
+        cardEntry?.view = card
+    }
+    func menuDidClose(_ menu: NSMenu) {
+        menuTracking = false
+        cardEntry?.view = nil
+    }
+    func windowWillClose(_ notification: Notification) {
+        settingsWindow?.contentViewController = nil
+        settingsWindow = nil
+    }
     @objc func openSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 680),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 740),
                                   styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "Battery Saver Settings"
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.contentViewController = NSHostingController(rootView: Panel(model: model))
             window.center()
             settingsWindow = window
         }
-        model.refresh()
+        model.refresh(forcePublish: true)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 }
 
 let app = NSApplication.shared
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-menu-icons" {
+    app.setActivationPolicy(.prohibited)
+    do { try renderMenuIconPreview(to: URL(fileURLWithPath: CommandLine.arguments[2])) }
+    catch { fputs("Icon preview failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    print("Rendered menu icon states without opening a window.")
+    exit(0)
+}
 if CommandLine.arguments.contains("--verify-details-button") {
     app.setActivationPolicy(.prohibited)
     var actions = 0
     let host = QuickCardHost(rootView: QuickCard(model: BatteryModel()) { actions += 1 })
-    host.frame = NSRect(x: 0, y: 0, width: 326, height: 280)
+    host.frame = NSRect(x: 0, y: 0, width: 326, height: 312)
     let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
     window.contentView = host
     host.layoutSubtreeIfNeeded()
@@ -232,6 +324,23 @@ if CommandLine.arguments.contains("--verify-details-button") {
     print("PASS: corners and center hit the full-area native button; five actions delivered; first mouse accepted. No window displayed.")
     exit(0)
 }
+if CommandLine.arguments.contains("--verify-idle-refresh") {
+    app.setActivationPolicy(.prohibited)
+    let model = BatteryModel()
+    model.isInterfaceVisible = { false }
+    var updates = 0
+    let observer = model.objectWillChange.sink { updates += 1 }
+    let cpuStart = clock()
+    for _ in 0..<100 { model.refresh() }
+    let cpuMilliseconds = Double(clock() - cpuStart) / Double(CLOCKS_PER_SEC) * 1000
+    guard updates == 0 else { fputs("FAIL: hidden refreshes still publish UI updates.\n", stderr); exit(1) }
+    model.isInterfaceVisible = { true }
+    model.refresh(forcePublish: true)
+    guard updates == 1 else { fputs("FAIL: reopening does not refresh the interface.\n", stderr); exit(1) }
+    withExtendedLifetime(observer) {}
+    print("PASS: 100 hidden refreshes published zero UI updates; reopening published once. CPU milliseconds: \(cpuMilliseconds)")
+    exit(0)
+}
 if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-preview" {
     app.setActivationPolicy(.prohibited)
     let previewModel = BatteryModel()
@@ -240,6 +349,33 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-pre
         previewModel.sample = BatterySample(date: Date(), percent: old?.percent ?? 60, temperature: old?.temperature ?? 25,
             externalPower: scenario != "battery", charging: scenario == "charging", currentMA: nil, voltageMV: nil,
             cycles: old?.cycles, healthPercent: old?.healthPercent)
+    }
+    if let percent = Int(ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_PERCENT"] ?? ""),
+       (0...100).contains(percent), let old = previewModel.sample {
+        previewModel.sample = BatterySample(date: Date(), percent: percent, temperature: old.temperature,
+            externalPower: old.externalPower, charging: old.charging, currentMA: old.currentMA, voltageMV: old.voltageMV,
+            cycles: old.cycles, healthPercent: old.healthPercent)
+    }
+    if let scenario = ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_INSIGHT"], let old = previewModel.sample {
+        let now = Date()
+        for offset in [-30.0, 0.0] {
+            let date = now.addingTimeInterval(offset)
+            let charging = scenario == "charging"
+            let connected = scenario != "battery"
+            let current = charging ? 900 : -650
+            let sample = BatterySample(date: date, percent: 65, temperature: old.temperature, externalPower: connected,
+                charging: charging, currentMA: current, voltageMV: old.voltageMV, cycles: old.cycles, healthPercent: old.healthPercent)
+            let telemetry = BatteryTelemetry(sensorDate: date, currentMA: current, remainingMAH: 2800, fullMAH: 4400,
+                percent: 65, externalPower: connected, charging: charging)
+            previewModel.acceptReading(sample: sample, telemetry: telemetry, now: date, uptime: 1000 + offset)
+        }
+    }
+    if let sleep = ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_SLEEP"], var status = previewModel.status {
+        status.date = Date()
+        status.sleepControlAvailable = true
+        status.sleepHeld = sleep == "held"
+        status.sleepMessage = status.sleepHeld ? "Keeping awake until \(status.settings.upper)%" : nil
+        previewModel.status = status
     }
     if ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_ERROR"] == "1" {
         previewModel.error = "Resume at must be below Limit at. Active settings have not changed."
