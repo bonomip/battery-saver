@@ -1,0 +1,22 @@
+# Swift build products and local package state
+/.build/
+/.swiftpm/
+/dist/
+
+# Generated screenshots, logs and machine-specific battery diagnostics
+/Verification/
+
+# macOS and editor state
+.DS_Store
+xcuserdata/
+*.xcuserstate
+.idea/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Local environment settings (keep shareable examples)
+.env
+.env.*
+!.env.example

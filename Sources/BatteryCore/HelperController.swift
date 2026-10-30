@@ -1,0 +1,107 @@
+import Foundation
+
+/// The daemon's lifecycle logic, independent of root privileges and IOKit.
+/// Ownership is checked afresh before every tick, sleep and shutdown operation.
+public final class HelperController {
+    private let session: ProtectionSession
+    private let backend: String
+    private let readSettings: () throws -> Settings
+    private let readBattery: () throws -> BatterySample
+    private let checkConflict: () throws -> Bool
+    private let readCommand: () -> CalibrationCommand?
+    private var inbox: CalibrationInbox
+    private var settings = Settings(enabled: false)
+    private var running = true
+    private var sleeping = false
+    private var needsDisabledRestore = true
+
+    public init(hardware: ChargingHardware, backend: String, existingCommand: CalibrationCommand?,
+                readSettings: @escaping () throws -> Settings, readBattery: @escaping () throws -> BatterySample,
+                checkConflict: @escaping () throws -> Bool, readCommand: @escaping () -> CalibrationCommand?,
+                adapterRecoveryRequired: Bool = false, persistAdapterRecovery: @escaping (Bool) throws -> Void = { _ in }) {
+        session = ProtectionSession(hardware: hardware, adapterRecoveryRequired: adapterRecoveryRequired,
+                                    persistAdapterRecovery: persistAdapterRecovery); self.backend = backend
+        self.readSettings = readSettings; self.readBattery = readBattery
+        self.checkConflict = checkConflict; self.readCommand = readCommand
+        inbox = CalibrationInbox(existing: existingCommand)
+    }
+    private func status(_ state: String, error: String? = nil, sample: BatterySample? = nil, allowed: Bool? = nil) -> HelperStatus {
+        HelperStatus(state: state, error: error, settings: settings, sample: sample, backend: backend,
+                     chargingAllowed: allowed, calibrationActive: session.calibration.active, running: running)
+    }
+    private func ownershipFailure() -> String? {
+        do {
+            return try checkConflict() ? "Another charging controller is running. Stop it before using Battery Saver." : nil
+        } catch { return "Cannot verify controller ownership: \(error.localizedDescription)" }
+    }
+    private func yieldControl(_ reason: String) -> HelperStatus {
+        var detail = reason
+        do { try session.relinquish() }
+        catch { detail += " Restoring our adapter input also failed: \(error.localizedDescription)" }
+        return status("Protection unverified", error: detail)
+    }
+    public func tick() -> HelperStatus {
+        guard running else { return status("Helper stopped") }
+        guard !sleeping else { return status("Sleeping") }
+        // This must precede settings/sensor reads: their failures must never
+        // trigger recovery writes while another controller owns the hardware.
+        if let failure = ownershipFailure() { return yieldControl(failure) }
+        var sample: BatterySample?
+        do {
+            let newSettings = try readSettings(); try newSettings.validate(); settings = newSettings
+            sample = try readBattery()
+            if let command = readCommand(), let start = inbox.consume(command) {
+                if start && settings.enabled {
+                    guard let sample = sample, sample.externalPower, sample.temperature <= settings.heatResume else {
+                        throw SaverError("Calibration requires the charger and a cool battery.")
+                    }
+                    try session.startCalibration()
+                } else { session.cancelCalibration() }
+            }
+        } catch {
+            session.cancelCalibration()
+            var detail = error.localizedDescription
+            if settings.enabled || needsDisabledRestore {
+                do { try session.recover(sample: sample, settings: settings) }
+                catch { detail += " Recovery also failed: \(error.localizedDescription)" }
+            }
+            return status("Protection needs attention", error: detail, sample: sample)
+        }
+        guard let sample = sample else { return status("Battery unavailable", error: "No battery sample") }
+        if !settings.enabled && !needsDisabledRestore {
+            return status("Protection off · macOS controls charging", sample: sample, allowed: true)
+        }
+        if settings.enabled { needsDisabledRestore = true }
+        do {
+            let decision = try session.update(sample, settings: settings)
+            if !settings.enabled { needsDisabledRestore = false }
+            return status(decision.reason, sample: sample, allowed: decision.allowCharging)
+        } catch {
+            // ProtectionSession has already attempted recovery. Do not issue
+            // a second independent set of hardware writes for the same failure.
+            return status("Protection needs attention", error: error.localizedDescription, sample: sample)
+        }
+    }
+    public func sleep() -> HelperStatus {
+        guard running else { return status("Helper stopped") }
+        sleeping = true
+        if let failure = ownershipFailure() { return yieldControl(failure) }
+        var detail: String?
+        do { let latest = try readSettings(); try latest.validate(); settings = latest }
+        catch { detail = error.localizedDescription }
+        do { try session.sleep(settings: settings) }
+        catch { detail = [detail, error.localizedDescription].compactMap { $0 }.joined(separator: "; ") }
+        return status(settings.enabled ? "Sleeping · charging paused" : "Sleeping · macOS controls charging",
+                      error: detail, allowed: detail == nil ? !settings.enabled : nil)
+    }
+    public func wake() -> HelperStatus {
+        sleeping = false; session.resetPolicy(); return tick()
+    }
+    public func stop() -> HelperStatus {
+        running = false
+        if let failure = ownershipFailure() { return yieldControl(failure) }
+        session.cancelCalibration()
+        do { try session.restore(); return status("Helper stopped · normal charging restored", allowed: true) }
+        catch { return status("Helper stopped · restoration failed", error: error.localizedDescription) }
+    }
+}
