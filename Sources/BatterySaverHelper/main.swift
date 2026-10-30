@@ -39,6 +39,11 @@ func readCalibrationCommand() -> CalibrationCommand? {
     }
 }
 
+let dischargeRequestPath = Locations.directory + "/discharge-request.json"
+func readDischargeCommand() -> DischargeCommand? {
+    (try? Data(contentsOf: URL(fileURLWithPath: dischargeRequestPath))).flatMap { try? JSONDecoder().decode(DischargeCommand.self, from: $0) }
+}
+
 final class Daemon {
     let controller: HelperController
     let sleepGuard: ChargingSleepGuard
@@ -57,7 +62,8 @@ final class Daemon {
                                       readSettings: Locations.readSettings, readBattery: BatteryReader.read,
                                       checkConflict: conflicts, readCommand: readCalibrationCommand,
                                       adapterRecoveryRequired: needsRecovery,
-                                      persistAdapterRecovery: recoveryStore.write)
+                                      persistAdapterRecovery: recoveryStore.write,
+                                      existingDischarge: readDischargeCommand(), readDischarge: readDischargeCommand)
     }
     @discardableResult func publish(_ status: HelperStatus) -> HelperStatus {
         var output = status
@@ -152,6 +158,19 @@ do {
         if settings.enabled { if try conflicts() { throw SaverError("AlDente or another controller is running. Stop it before activating Battery Saver.") } }
         try writeJSON(settings, path: Locations.settings)
         print("Settings saved. The helper applies them within five seconds.")
+    case "--discharge", "--cancel-discharge":
+        try checkRootDirectory()
+        let target: Int?
+        if arguments[0] == "--discharge" {
+            guard arguments.count == 3, let value = Int(arguments[1]), (21...100).contains(value),
+                  try Locations.readSettings().enabled, try !conflicts() else { throw SaverError("Invalid discharge request.") }
+            target = value
+        } else {
+            guard arguments.count == 2 else { throw SaverError("Invalid cancellation request.") }
+            target = nil
+        }
+        guard let id = UUID(uuidString: arguments.last ?? "") else { throw SaverError("Missing discharge request identifier.") }
+        try writeJSON(DischargeCommand(id: id, target: target), path: dischargeRequestPath)
     case "--calibrate", "--cancel-calibration":
         try checkRootDirectory()
         if arguments[0] == "--calibrate" {

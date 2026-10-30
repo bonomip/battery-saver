@@ -96,6 +96,10 @@ public struct HelperStatus: Codable, Equatable {
     public var running: Bool
     public var sleepControlAvailable: Bool
     public var sleepHeld: Bool
+    public var dischargeSupported = false
+    public var dischargeTarget: Int?
+    public var dischargeCommandID: UUID?
+    public var dischargeCommandError: String?
     public var sleepMessage: String?
     public var isCurrent: Bool { running && error == nil && (-5...30).contains(Date().timeIntervalSince(date)) }
     public init(date: Date = Date(), state: String, error: String?, settings: Settings, sample: BatterySample?, backend: String, chargingAllowed: Bool?, calibrationActive: Bool = false, running: Bool = true, sleepControlAvailable: Bool = false, sleepHeld: Bool = false, sleepMessage: String? = nil) {
@@ -109,7 +113,7 @@ public struct HelperStatus: Codable, Equatable {
     }
     private enum CodingKeys: String, CodingKey {
         case date, state, error, settings, sample, backend, chargingAllowed, calibrationActive, running
-        case sleepControlAvailable, sleepHeld, sleepMessage
+        case sleepControlAvailable, sleepHeld, sleepMessage, dischargeSupported, dischargeTarget, dischargeCommandID, dischargeCommandError
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -124,6 +128,10 @@ public struct HelperStatus: Codable, Equatable {
         running = try values.decode(Bool.self, forKey: .running)
         sleepControlAvailable = try values.contains(.sleepControlAvailable) ? values.decode(Bool.self, forKey: .sleepControlAvailable) : false
         sleepHeld = try values.contains(.sleepHeld) ? values.decode(Bool.self, forKey: .sleepHeld) : false
+        dischargeSupported = try values.decodeIfPresent(Bool.self, forKey: .dischargeSupported) ?? false
+        dischargeTarget = try values.decodeIfPresent(Int.self, forKey: .dischargeTarget)
+        dischargeCommandID = try values.decodeIfPresent(UUID.self, forKey: .dischargeCommandID)
+        dischargeCommandError = try values.decodeIfPresent(String.self, forKey: .dischargeCommandError)
         sleepMessage = try values.decodeIfPresent(String.self, forKey: .sleepMessage)
     }
 }

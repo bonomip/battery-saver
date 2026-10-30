@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:battery-saver}",
+            "name": "Debug BatterySaver",
+            "target": "BatterySaver",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug BatterySaver"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:battery-saver}",
+            "name": "Release BatterySaver",
+            "target": "BatterySaver",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release BatterySaver"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:battery-saver}",
+            "name": "Debug battery-saver-helper",
+            "target": "battery-saver-helper",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug battery-saver-helper"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:battery-saver}",
+            "name": "Release battery-saver-helper",
+            "target": "battery-saver-helper",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release battery-saver-helper"
+        }
+    ]
+}

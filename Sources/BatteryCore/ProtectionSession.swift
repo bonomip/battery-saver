@@ -11,6 +11,13 @@ extension ChargeGate: ChargingHardware {}
 public final class ProtectionSession {
     private let hardware: ChargingHardware
     private var policy = ChargePolicy()
+    public private(set) var discharge = ForcedDischarge()
+    public var dischargeSupported: Bool { hardware.adapterSupported() }
+    public func startDischarge(sample: BatterySample, settings: Settings, target: Int) throws {
+        guard !calibration.active, hardware.adapterSupported() else { throw SaverError("Discharge unavailable during calibration or on unsupported hardware.") }
+        try discharge.start(sample: sample, settings: settings, target: target)
+    }
+    public func cancelDischarge() { discharge.cancel() }
     private let persistAdapterRecovery: (Bool) throws -> Void
     public private(set) var calibration = Calibration()
     public private(set) var adapterMayBeDisabled = false
@@ -21,11 +28,13 @@ public final class ProtectionSession {
     }
     public func startCalibration() throws {
         guard hardware.adapterSupported() else { throw SaverError("Calibration adapter control is unsupported.") }
+        guard !discharge.active else { throw SaverError("Cancel discharge before calibration.") }
         guard !calibration.active else { return }
         calibration.start()
     }
     public func cancelCalibration() { calibration.cancel() }
     public func relinquish() throws {
+        discharge.cancel()
         calibration.cancel()
         if adapterMayBeDisabled { try setAdapter(true) }
     }
@@ -46,9 +55,11 @@ public final class ProtectionSession {
         }
     }
     public func restore() throws {
+        discharge.cancel()
         try recover(sample: nil, settings: Settings(enabled: false))
     }
     public func recover(sample: BatterySample?, settings: Settings) throws {
+        discharge.cancel()
         var failures: [String] = []
         var allowCharging = true
         if !settings.enabled {
@@ -77,6 +88,7 @@ public final class ProtectionSession {
         if !failures.isEmpty { throw SaverError(failures.joined(separator: "; ")) }
     }
     public func sleep(settings: Settings) throws {
+        discharge.cancel()
         calibration.cancel()
         var failures: [String] = []
         if hardware.adapterSupported() {
@@ -88,7 +100,12 @@ public final class ProtectionSession {
     public func update(_ sample: BatterySample, settings: Settings) throws -> Decision {
         do {
             try settings.validate()
-            if !settings.enabled { calibration.cancel() }
+            if !settings.enabled { calibration.cancel(); discharge.cancel() }
+            if try discharge.step(sample: sample, settings: settings) {
+                try hardware.setAllowed(false)
+                try setAdapter(false)
+                return Decision(allowCharging: false, reason: "Discharging to \(settings.upper)%")
+            }
             if let action = try calibration.step(sample, settings: settings) {
                 if !action.allowCharging { try hardware.setAllowed(false) }
                 try setAdapter(action.useAdapter)
@@ -107,6 +124,7 @@ public final class ProtectionSession {
             try hardware.setAllowed(decision.allowCharging)
             return decision
         } catch {
+            discharge.cancel()
             calibration.cancel()
             var message = error.localizedDescription
             do { try recover(sample: sample, settings: settings) } catch { message += " Restoration also failed: \(error.localizedDescription)" }

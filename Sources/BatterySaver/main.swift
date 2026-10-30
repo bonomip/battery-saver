@@ -11,6 +11,8 @@ final class BatteryModel: ObservableObject {
     @Published private var settingsDraft = SettingsDraft()
     var settings: BatteryCore.Settings { settingsDraft.settings }
     @Published var saving = false
+    @Published var dischargePending = false
+    private var dischargeRequest: (UUID, Date)?
     @Published var inputErrors: Set<String> = []
     @Published private(set) var startAtLogin = false
     @Published var draftResetID = 0
@@ -56,6 +58,15 @@ final class BatteryModel: ObservableObject {
             acceptReading(sample: reading.sample, telemetry: reading.telemetry)
             readError = nil
         } catch { sample = nil; insight = nil; insightDate = nil; readError = error.localizedDescription }
+        if let (id, date) = dischargeRequest {
+            if status?.dischargeCommandID == id && status?.running == true && (-5...30).contains(Date().timeIntervalSince(status?.date ?? .distantPast)) {
+                dischargeRequest = nil; dischargePending = false
+                if let failure = status?.dischargeCommandError { error = failure }
+            } else if Date().timeIntervalSince(date) > 30 {
+                dischargeRequest = nil; dischargePending = false
+                error = "Discharge command was not acknowledged. Check the helper before retrying."
+            }
+        }
         var draft = settingsDraft
         if let message = draft.refresh(status: status) { error = message }
         if !helperInstalled { draft.helperUnavailable() }
@@ -78,8 +89,22 @@ final class BatteryModel: ObservableObject {
         insightDate = sample.date
     }
     var activity: BatteryActivity { sample?.date == insightDate ? (insight?.activity ?? BatteryActivity(sample: sample)) : BatteryActivity(sample: sample) }
-    var estimate: String? { sample?.date == insightDate ? insight?.estimate : nil }
-    var batteryTone: BatteryTone { activity.tone(percent: sample?.percent) }
+    var estimate: String? { if status?.dischargeTarget != nil { return nil }; return sample?.date == insightDate ? insight?.estimate : nil }
+    var batteryTone: BatteryTone {
+        if status?.dischargeTarget != nil { return (sample?.percent ?? 100) < 15 ? .red : .yellow }
+        return activity.tone(percent: sample?.percent)
+    }
+    func startDischarge() {
+        guard !dischargePending, !hasDraft, !awaitingSettings, !saving, let status = status, status.isCurrent,
+              status.dischargeSupported, status.settings.enabled, !status.calibrationActive,
+              let sample = sample, sample.externalPower, sample.percent > status.settings.upper else { return }
+        let id = UUID()
+        authorize(["--discharge", "\(status.settings.upper)", id.uuidString])
+    }
+    func cancelDischarge() {
+        guard !saving else { return }
+        authorize(["--cancel-discharge", UUID().uuidString])
+    }
     func discardChanges() {
         guard !saving, !awaitingSettings else { return }
         settingsDraft.discard()
@@ -147,6 +172,11 @@ final class BatteryModel: ObservableObject {
             } catch { message = error.localizedDescription }
             DispatchQueue.main.async {
                 self.saving = false; self.error = message
+                if arguments.first == "--discharge" || arguments.first == "--cancel-discharge" {
+                    if message == nil && !cancelled, let id = UUID(uuidString: arguments.last ?? "") {
+                        self.dischargeRequest = (id, Date()); self.dischargePending = true
+                    }
+                }
                 if configuration { self.settingsDraft.authorizationFinished(succeeded: message == nil && !cancelled, cancelled: cancelled) }
                 self.refresh()
             }
@@ -172,7 +202,7 @@ struct ChargeThresholdControl: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(title)
+                Text(title).frame(width: 68, alignment: .leading)
                 Slider(value: Binding(get: { Double(value) }, set: {
                     value = Int($0.rounded()); text = "\(value)"; inputErrors.remove(title)
                 }), in: Double(range.lowerBound)...Double(range.upperBound))
@@ -181,7 +211,7 @@ struct ChargeThresholdControl: View {
                     .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 48)
                     .accessibilityLabel("\(title) percentage")
                 Text("%")
-            }.padding(.vertical, 7)
+            }.padding(.vertical, 3)
             if inputErrors.contains(title) {
                 Text("Enter a whole number from \(range.lowerBound) to \(range.upperBound)%.")
                     .font(.caption).foregroundColor(.red)
@@ -200,12 +230,14 @@ struct ChargeThresholdControl: View {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
     var item: NSStatusItem!
-    let menu = NSMenu()
+    let statusPopover = NSPopover()
+    private let statusDismissal = StatusDismissal()
     var settingsWindow: NSWindow?
     private var menuTracking = false
-    private var cardEntry: NSMenuItem?
+    private var closingStatus = false
+    private var statusGeneration = UUID()
     private var lastIconKey: String?
     let model = BatteryModel()
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -226,14 +258,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry); NSApp.mainMenu = mainMenu
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Native menu tracking owns menu-bar visibility, including fullscreen Spaces.
-        menu.autoenablesItems = false
-        menu.delegate = self
-        let entry = NSMenuItem(title: "Settings & details", action: #selector(openSettings), keyEquivalent: "")
-        entry.target = self
-        cardEntry = entry
-        menu.addItem(entry)
-        item.menu = menu
+        statusPopover.behavior = .applicationDefined
+        statusPopover.animates = false
+        statusPopover.delegate = self
+        item.button?.target = self
+        item.button?.action = #selector(toggleStatus)
         model.onRefresh = { [weak self] in self?.update() }; update()
     }
     func update() {
@@ -250,20 +279,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         if button.toolTip != model.state { button.toolTip = model.state }
     }
-    func menuWillOpen(_ menu: NSMenu) {
+    @objc func toggleStatus() {
+        if statusPopover.isShown { dismissStatus(); return }
+        guard let button = item.button else { return }
+        statusGeneration = UUID()
         menuTracking = true
         model.refresh(forcePublish: true)
-        let card = QuickCardHost(rootView: QuickCard(model: model) { [weak self] in
-            self?.menu.cancelTracking()
+        let host = QuickCardHost(rootView: QuickCard(model: model) { [weak self] in
+            self?.dismissStatus()
             DispatchQueue.main.async { self?.openSettings() }
         })
-        // Keep geometry fixed during tracking, including while the estimate settles.
-        card.frame = NSRect(x: 0, y: 0, width: 326, height: 312)
-        cardEntry?.view = card
+        host.frame = NSRect(x: 0, y: 0, width: QuickCard.width, height: QuickCard.height)
+        let controller = NSViewController()
+        controller.view = host
+        statusPopover.contentViewController = controller
+        statusPopover.contentSize = host.frame.size
+        statusPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        host.window?.alphaValue = 1
+        host.window?.collectionBehavior = [.transient, .fullScreenAuxiliary]
+        NSApp.activate(ignoringOtherApps: true)
+        host.window?.makeKey()
+        statusDismissal.start(contains: { [weak self] event in
+            guard let self = self else { return false }
+            if event.window === self.statusPopover.contentViewController?.view.window { return true }
+            if let button = self.item.button, event.window === button.window {
+                return button.bounds.contains(button.convert(event.locationInWindow, from: nil))
+            }
+            return false
+        }, anchorVisible: { [weak self] in
+            guard let button = self?.item.button, let window = button.window,
+                  window.isVisible, let screen = window.screen else { return false }
+            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+            let visible = rect.intersection(screen.frame)
+            return !visible.isNull && visible.height >= rect.height * 0.5
+        }, close: { [weak self] in self?.dismissStatus() })
     }
-    func menuDidClose(_ menu: NSMenu) {
+    private func dismissStatus() {
+        guard statusPopover.isShown, !closingStatus else { return }
+        closingStatus = true
+        statusDismissal.stop()
+        let generation = statusGeneration
+        fadeStatusWindow(statusPopover.contentViewController?.view.window,
+                         reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) { [weak self] in
+            guard let self = self, self.closingStatus, self.statusGeneration == generation else { return }
+            self.statusPopover.performClose(nil)
+        }
+    }
+    func popoverDidClose(_ notification: Notification) {
+        closingStatus = false
+        statusPopover.contentViewController?.view.window?.alphaValue = 1
+        statusDismissal.stop()
         menuTracking = false
-        cardEntry?.view = nil
+        statusPopover.contentViewController = nil
     }
     func windowWillClose(_ notification: Notification) {
         settingsWindow?.contentViewController = nil
@@ -295,11 +362,61 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-men
     print("Rendered menu icon states without opening a window.")
     exit(0)
 }
+if CommandLine.arguments.contains("--verify-status-fade") {
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: .borderless, backing: .buffered, defer: false)
+    var completed = 0
+    fadeStatusWindow(window, reduceMotion: false) { completed += 1 }
+    RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+    precondition(completed == 1 && window.alphaValue == 0)
+    window.alphaValue = 1
+    fadeStatusWindow(window, reduceMotion: true) { completed += 1 }
+    precondition(completed == 2 && window.alphaValue == 1)
+    fadeStatusWindow(nil, reduceMotion: false) { completed += 1 }
+    precondition(completed == 3)
+    print("PASS: fade completes once; reduced-motion and missing-window paths close immediately. No window displayed.")
+    exit(0)
+}
+if CommandLine.arguments.contains("--verify-status-dismissal") {
+    for type in [NSEvent.EventType.leftMouseDown, .rightMouseDown, .otherMouseDown] {
+        precondition(StatusDismissal.shouldClose(type: type, keyCode: 0, inside: false))
+        precondition(!StatusDismissal.shouldClose(type: type, keyCode: 0, inside: true))
+    }
+    precondition(StatusDismissal.shouldClose(type: .keyDown, keyCode: 53, inside: true))
+    precondition(!StatusDismissal.shouldClose(type: .keyDown, keyCode: 0, inside: false))
+    // Install/remove real AppKit monitors repeatedly; cleanup must be idempotent.
+    let monitor = StatusDismissal()
+    for _ in 0..<10 { monitor.start(contains: { _ in false }, close: {}); monitor.stop(); monitor.stop() }
+    var closes = 0
+    monitor.start(contains: { _ in false }, close: { closes += 1 })
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+    NotificationCenter.default.post(name: NSApplication.didHideNotification, object: NSApp)
+    NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+    precondition(closes == 3)
+    monitor.stop()
+    NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+    precondition(closes == 3)
+    monitor.checkMenuBar(menuVisible: false, anchorVisible: true, close: { closes += 1 })
+    precondition(closes == 3) // Initial fullscreen flag does not dismiss a visible anchor.
+    monitor.checkMenuBar(menuVisible: true, anchorVisible: true, close: { closes += 1 })
+    precondition(closes == 3)
+    monitor.checkMenuBar(menuVisible: false, anchorVisible: true, close: { closes += 1 })
+    precondition(closes == 4)
+    monitor.stop()
+    monitor.checkMenuBar(menuVisible: false, anchorVisible: false, close: { closes += 1 })
+    precondition(closes == 5)
+    monitor.start(contains: { _ in false }, anchorVisible: { false }, close: { closes += 1; monitor.stop() })
+    RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+    precondition(closes == 6)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+    precondition(closes == 6) // No timer or monitor callbacks remain after close.
+    print("PASS: outside/Escape, notifications, menu-bar transitions, real visibility timer and cleanup checks.")
+    exit(0)
+}
 if CommandLine.arguments.contains("--verify-details-button") {
     app.setActivationPolicy(.prohibited)
     var actions = 0
     let host = QuickCardHost(rootView: QuickCard(model: BatteryModel()) { actions += 1 })
-    host.frame = NSRect(x: 0, y: 0, width: 326, height: 312)
+    host.frame = NSRect(x: 0, y: 0, width: QuickCard.width, height: QuickCard.height)
     let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
     window.contentView = host
     host.layoutSubtreeIfNeeded()
@@ -307,7 +424,7 @@ if CommandLine.arguments.contains("--verify-details-button") {
         if let button = view as? DetailsActionButton { return button }
         return view.subviews.compactMap { findButton($0) }.first
     }
-    guard let button = findButton(host), button.bounds.width >= 280, button.bounds.height >= 38 else {
+    guard let button = findButton(host), button.bounds.width >= 28, button.bounds.height >= 28 else {
         fputs("FAIL: full-area details button is missing.\n", stderr); exit(1)
     }
     for point in [NSPoint(x: 2, y: 2), NSPoint(x: button.bounds.width - 2, y: 2),
@@ -379,6 +496,28 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-pre
     }
     if ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_ERROR"] == "1" {
         previewModel.error = "Resume at must be below Limit at. Active settings have not changed."
+    }
+    // Complete deterministic fixtures keep screenshots independent of the installed helper.
+    if let fixture = ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_FIXTURE"] {
+        let now = Date()
+        var status = HelperStatus(state: "Paused until 75%", error: nil, settings: Settings(), sample: nil,
+                                  backend: "Preview", chargingAllowed: false)
+        status.sleepControlAvailable = true; status.dischargeSupported = fixture != "old"
+        if fixture == "discharge" { status.dischargeTarget = 80 }
+        if fixture == "calibration" { status.calibrationActive = true; status.state = "Calibration · discharging to 15%" }
+        previewModel.status = fixture == "missing" ? nil : status
+        for offset in [-10.0, 0.0] {
+            let date = now.addingTimeInterval(offset)
+            let percent = fixture == "discharge" ? 85 : 80
+            let charging = fixture == "charging"
+            let connected = fixture != "battery" && fixture != "discharge"
+            let current = charging ? 700 : (fixture == "draining" || fixture == "discharge" ? -600 : 0)
+            let sample = BatterySample(date: date, percent: percent, temperature: 26, externalPower: connected,
+                                       charging: charging, currentMA: current, voltageMV: 12000, cycles: 433, healthPercent: 86)
+            previewModel.acceptReading(sample: sample, telemetry: BatteryTelemetry(sensorDate: date, currentMA: current,
+                remainingMAH: 3500, fullMAH: 4400, percent: percent, externalPower: connected, charging: charging), now: date, uptime: 1000 + offset)
+        }
+        if fixture == "error" { previewModel.error = "Resume at must be below Limit at. Active settings have not changed. This is a longer warning to verify that the full three-line error remains visible without hiding the footer or controls." }
     }
     let quick = ProcessInfo.processInfo.environment["BATTERY_SAVER_PREVIEW_QUICK"] == "1"
     let view = NSHostingView(rootView: quick ? AnyView(QuickCard(model: previewModel, openDetails: {})) : AnyView(Panel(model: previewModel)))

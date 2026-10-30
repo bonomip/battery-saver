@@ -44,6 +44,8 @@ private struct DetailsActionSurface: NSViewRepresentable {
 /// Read-only overview. Charge settings are edited only in the detailed window.
 struct QuickCard: View {
     @ObservedObject var model: BatteryModel
+    static let width: CGFloat = 374
+    static let height: CGFloat = 258
     let openDetails: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -62,17 +64,23 @@ struct QuickCard: View {
                 Image(systemName: "battery.75").foregroundColor(tint)
                 Text("Battery Saver").font(.system(size: 13, weight: .semibold))
                 Spacer()
+                Image(systemName: "gearshape").font(.system(size: 16, weight: .medium))
+                    .frame(width: 30, height: 30)
+                    .overlay(DetailsActionSurface(action: openDetails))
+                    .help("Settings and details")
                 if let warning = model.warning {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).help(warning)
                 }
             }
             HStack(spacing: 18) {
-                BatteryRing(model: model, size: 108)
+                BatteryRing(model: model, size: 96)
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(model.activity.title).font(.system(size: 12, weight: .medium))
+                    Text(model.activity.title).font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        .foregroundColor(.primary)
                         .padding(.horizontal, 9).padding(.vertical, 5)
                         .background(RoundedRectangle(cornerRadius: 7).fill(tint.opacity(0.12)))
-                    Text(model.estimate ?? pausedDetail).font(.system(size: 12))
+                    Text(model.status?.dischargeTarget.map { "Discharging to \($0)%" } ?? model.estimate ?? pausedDetail).font(.system(size: 12))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
@@ -81,20 +89,12 @@ struct QuickCard: View {
                 metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature")
                 metric(limit, label: "Charge limit")
             }
-                HStack {
-                    Text("Settings & details").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold))
-                }.padding(.horizontal, 14).frame(height: 38)
-                    .foregroundColor(colorScheme == .dark ? .black : .white)
-                    .background(colorScheme == .dark ? Color.white.opacity(0.9) : Color(red: 0.04, green: 0.36, blue: 0.24))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(DetailsActionSurface(action: openDetails))
+
         }
-        .padding(20).frame(width: 326, height: 312)
-        .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.08 : 0.06), Color(NSColor.windowBackgroundColor)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .padding(18).frame(width: Self.width, height: Self.height)
+        .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.25 : 0.18), Color(NSColor.windowBackgroundColor)], startPoint: .topLeading, endPoint: .bottomTrailing))
         .background(Color(NSColor.windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+
     }
 
     private var pausedDetail: String {

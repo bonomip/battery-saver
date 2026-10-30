@@ -49,7 +49,7 @@ public final class ChargingSleepGuard {
         let eligible: Bool
         if let sample = status.sample {
             eligible = status.settings.enabled && status.settings.keepAwakeUntilLimit && status.running
-                && status.error == nil && !status.calibrationActive && status.chargingAllowed == true
+                && status.error == nil && status.dischargeTarget == nil && !status.calibrationActive && status.chargingAllowed == true
                 && sample.externalPower && (0...100).contains(sample.percent)
                 && sample.percent < status.settings.upper && sample.temperature.isFinite
                 && sample.temperature < status.settings.heatPause
