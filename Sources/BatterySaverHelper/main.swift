@@ -111,6 +111,18 @@ final class Daemon {
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
     switch arguments.first ?? "--probe" {
+    case "--version-json":
+        guard arguments.count == 1 else { throw SaverError("Usage: --version-json") }
+        print(String(decoding: try JSONEncoder().encode(HelperVersion.current), as: UTF8.self))
+    case "--check-stopped":
+        guard arguments.count == 1 else { throw SaverError("Usage: --check-stopped") }
+        try checkRootDirectory()
+        let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
+        withExtendedLifetime(lock) { print("Helper control lock is released.") }
+    case "--migrate-settings":
+        guard arguments.count == 2 else { throw SaverError("Usage: --migrate-settings path") }
+        let data = try Data(contentsOf: URL(fileURLWithPath: arguments[1]))
+        FileHandle.standardOutput.write(try SettingsMigration.migrate(data))
     case "--probe":
         let sample = try BatteryReader.read()
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

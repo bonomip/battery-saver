@@ -39,9 +39,12 @@ struct Panel: View {
                         .toggleStyle(StateSwitchStyle(tint: green)).fixedSize()
                     Divider().frame(height: 26)
                     HStack(spacing: 6) {
-                        Circle().fill(model.status?.isCurrent == true ? Color.green : .gray).frame(width: 6, height: 6)
+                        Circle().fill(model.helperCompatible && model.status?.isCurrent == true ? Color.green : .orange).frame(width: 6, height: 6)
                         Text("Helper").font(.caption)
-                            .help(model.status?.isCurrent == true ? "Helper active" : "Helper needs attention")
+                            .help(model.helperUpgrade.warning ?? (model.status?.isCurrent == true ? "Helper active" : "Helper needs attention"))
+                        if model.helperUpgrade == .updateRequired {
+                            Button("Update…") { model.updateHelper() }.disabled(model.saving)
+                        }
                         if model.helperInstalled {
                             Button("Manage…") { showUninstall = true }.disabled(model.saving)
                         } else {
@@ -139,7 +142,7 @@ struct Panel: View {
                 Divider()
                 sleepBehavior
 
-            }.disabled(model.saving)
+            }.disabled(model.saving || !model.helperCompatible)
         }
     }
 
@@ -149,7 +152,7 @@ struct Panel: View {
                 Text("Discharge to limit").font(.headline)
                 if let target = model.status?.dischargeTarget {
                     Text("Discharging to \(target)%").font(.caption).foregroundColor(.orange)
-                    Button("Cancel discharge") { model.cancelDischarge() }.disabled(model.saving)
+                    Button("Cancel discharge") { model.cancelDischarge() }.disabled(model.saving || !model.helperCompatible)
                 } else {
                     Button("Discharge to limit…") { model.startDischarge() }
                         .help("Runs once to the applied limit. Cancels on sleep, heat, settings changes, after eight hours, or 30 minutes without progress. Adapter control can hide physical unplug detection; keep the cable attached.")

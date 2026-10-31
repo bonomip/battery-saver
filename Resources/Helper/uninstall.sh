@@ -1,9 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
-if (( EUID != 0 )); then
-    print -u2 'Run: sudo /bin/zsh Scripts/uninstall.sh'
-    exit 1
-fi
+(( EUID == 0 )) || { print -u2 'Administrator authorization is required.'; exit 1; }
 dir='/Library/Application Support/BatterySaver'
 label='local.paolo.battery-saver'
 helper="$dir/battery-saver-helper"

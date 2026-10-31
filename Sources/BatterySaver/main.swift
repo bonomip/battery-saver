@@ -10,6 +10,11 @@ final class BatteryModel: ObservableObject {
     @Published var error: String?
     @Published private var settingsDraft = SettingsDraft()
     var settings: BatteryCore.Settings { settingsDraft.settings }
+    @Published private(set) var helperUpgrade: HelperUpgrade = .checking
+    private var inspectedHelper = false
+    private var installedHelperVersion: HelperVersion?
+    private var updateAuthorization = HelperUpdateAuthorization()
+    var helperCompatible: Bool { helperUpgrade == .ready }
     @Published var saving = false
     @Published var dischargePending = false
     private var dischargeRequest: (UUID, Date)?
@@ -28,7 +33,7 @@ final class BatteryModel: ObservableObject {
     var onRefresh: (() -> Void)?
     var readError: String?
     var helperInstalled: Bool { FileManager.default.fileExists(atPath: Locations.helper) }
-    var protectionVerified: Bool { helperInstalled && sample != nil && status?.isCurrent == true && status?.settings.enabled == true }
+    var protectionVerified: Bool { helperCompatible && helperInstalled && sample != nil && status?.isCurrent == true && status?.settings.enabled == true }
     init() {
         startAtLogin = LoginStartup().isEnabled(app: Bundle.main.bundleURL)
         refresh()
@@ -53,6 +58,11 @@ final class BatteryModel: ObservableObject {
     }
     func refresh(forcePublish: Bool = false) {
         status = (try? Data(contentsOf: URL(fileURLWithPath: Locations.status))).flatMap { try? JSONDecoder().decode(HelperStatus.self, from: $0) }
+        if inspectedHelper {
+            let state = HelperUpgrade.assess(installed: helperInstalled, version: installedHelperVersion,
+                runningVersion: status?.running == true && (-5...30).contains(Date().timeIntervalSince(status?.date ?? .distantPast)) ? status?.helperVersion : nil)
+            if state != helperUpgrade { helperUpgrade = state }
+        }
         do {
             let reading = try BatteryReader.readSnapshot()
             acceptReading(sample: reading.sample, telemetry: reading.telemetry)
@@ -128,6 +138,7 @@ final class BatteryModel: ObservableObject {
     var state: String { activity.title }
     var warning: String? {
         if let error = error { return error }
+        if let message = helperUpgrade.warning { return message }
         if let readError = readError { return readError }
         guard helperInstalled else { return nil }
         guard let status = status else { return "Waiting for the background helper. Protection is unverified." }
@@ -137,20 +148,49 @@ final class BatteryModel: ObservableObject {
         return nil
     }
     func authorize(_ arguments: [String]) {
+        guard helperCompatible else { error = helperUpgrade.warning; return }
         runAuthorized(executable: Locations.helper, arguments: arguments)
     }
     func draft<Value>(_ keyPath: WritableKeyPath<BatteryCore.Settings, Value>) -> Binding<Value> {
         Binding(get: { self.settings[keyPath: keyPath] }, set: { self.settingsDraft.edit(keyPath, to: $0) })
     }
+    func checkHelperCompatibility(offerUpdate: Bool = false) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let installed = FileManager.default.fileExists(atPath: Locations.helper)
+            let version = installed ? (try? HelperVersion.read(executable: Locations.helper)) : nil
+            DispatchQueue.main.async {
+                self.installedHelperVersion = version
+                self.inspectedHelper = true
+                self.refresh(forcePublish: true)
+                if offerUpdate && self.helperUpgrade == .updateRequired {
+                    let alert = NSAlert()
+                    alert.messageText = "Update Battery Saver’s background helper?"
+                    alert.informativeText = "Update to helper revision \(HelperVersion.current.revision). Your settings will be preserved. macOS will ask for administrator authorization."
+                    alert.addButton(withTitle: "Update helper")
+                    alert.addButton(withTitle: "Later")
+                    NSApp.activate(ignoringOtherApps: true)
+                    if alert.runModal() == .alertFirstButtonReturn { self.updateHelper() }
+                }
+            }
+        }
+    }
+    func updateHelper() {
+        guard helperUpgrade == .updateRequired, !saving, updateAuthorization.begin() else { return }
+        guard let script = Bundle.main.path(forResource: "helper", ofType: "sh") else {
+            _ = updateAuthorization.finish(succeeded: false, cancelled: false)
+            error = "Helper updater is missing from this app bundle."; return
+        }
+        runAuthorized(executable: "/bin/zsh", arguments: [script, "update"], helperUpdate: true)
+    }
     func installHelper() {
-        guard let script = Bundle.main.path(forResource: "install-helper", ofType: "sh") else { error = "Helper installer is missing from this app bundle."; return }
-        runAuthorized(executable: "/bin/zsh", arguments: [script])
+        guard let script = Bundle.main.path(forResource: "helper", ofType: "sh") else { error = "Helper manager is missing from this app bundle."; return }
+        runAuthorized(executable: "/bin/zsh", arguments: [script, "install"])
     }
     func removeHelper() {
-        guard let script = Bundle.main.path(forResource: "uninstall-helper", ofType: "sh") else { error = "Helper uninstaller is missing from this app bundle."; return }
-        runAuthorized(executable: "/bin/zsh", arguments: [script])
+        guard let script = Bundle.main.path(forResource: "helper", ofType: "sh") else { error = "Helper manager is missing from this app bundle."; return }
+        runAuthorized(executable: "/bin/zsh", arguments: [script, "uninstall"])
     }
-    private func runAuthorized(executable: String, arguments: [String], configuration: Bool = false) {
+    private func runAuthorized(executable: String, arguments: [String], configuration: Bool = false, helperUpdate: Bool = false) {
         guard !saving else { return }
         saving = true; error = nil
         let command = ([executable] + arguments).map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
@@ -178,11 +218,16 @@ final class BatteryModel: ObservableObject {
                     }
                 }
                 if configuration { self.settingsDraft.authorizationFinished(succeeded: message == nil && !cancelled, cancelled: cancelled) }
+                if helperUpdate {
+                    _ = self.updateAuthorization.finish(succeeded: message == nil, cancelled: cancelled)
+                }
+                self.checkHelperCompatibility()
                 self.refresh()
             }
         }
     }
     func save() {
+        guard helperCompatible else { error = helperUpgrade.warning; return }
         guard !saving else { return }
         guard inputErrors.isEmpty else { error = "Enter whole-number percentages in the allowed ranges before applying."; return }
         let submitted: BatteryCore.Settings
@@ -243,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         model.configureLoginStartup()
+        model.checkHelperCompatibility(offerUpdate: true)
         model.isInterfaceVisible = { [weak self] in
             guard let self = self else { return false }
             return self.menuTracking || self.settingsWindow?.isVisible == true

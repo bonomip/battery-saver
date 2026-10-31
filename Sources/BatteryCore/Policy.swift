@@ -7,6 +7,7 @@ public struct SaverError: LocalizedError {
 }
 
 public struct Settings: Codable, Equatable {
+    public private(set) var schemaVersion = HelperVersion.current.settingsSchema
     public var enabled: Bool
     public var lower: Int
     public var upper: Int
@@ -19,10 +20,14 @@ public struct Settings: Codable, Equatable {
         self.keepAwakeUntilLimit = keepAwakeUntilLimit
     }
     private enum CodingKeys: String, CodingKey {
-        case enabled, lower, upper, heatPause, heatResume, keepAwakeUntilLimit
+        case schemaVersion, enabled, lower, upper, heatPause, heatResume, keepAwakeUntilLimit
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        let schema = try values.contains(.schemaVersion) ? values.decode(Int.self, forKey: .schemaVersion) : 0
+        guard (0...HelperVersion.current.settingsSchema).contains(schema) else {
+            throw SaverError("Settings require a newer Battery Saver app; downgrade refused.")
+        }
         enabled = try values.decode(Bool.self, forKey: .enabled)
         lower = try values.decode(Int.self, forKey: .lower)
         upper = try values.decode(Int.self, forKey: .upper)
@@ -85,6 +90,7 @@ public struct ChargePolicy {
 }
 
 public struct HelperStatus: Codable, Equatable {
+    public var helperVersion: HelperVersion? = .current
     public var date: Date
     public var state: String
     public var error: String?
@@ -112,11 +118,12 @@ public struct HelperStatus: Codable, Equatable {
         self.sleepMessage = sleepMessage
     }
     private enum CodingKeys: String, CodingKey {
-        case date, state, error, settings, sample, backend, chargingAllowed, calibrationActive, running
+        case helperVersion, date, state, error, settings, sample, backend, chargingAllowed, calibrationActive, running
         case sleepControlAvailable, sleepHeld, sleepMessage, dischargeSupported, dischargeTarget, dischargeCommandID, dischargeCommandError
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        helperVersion = try values.decodeIfPresent(HelperVersion.self, forKey: .helperVersion)
         date = try values.decode(Date.self, forKey: .date)
         state = try values.decode(String.self, forKey: .state)
         error = try values.decodeIfPresent(String.self, forKey: .error)
