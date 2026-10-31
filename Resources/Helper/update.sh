@@ -5,7 +5,7 @@ set -euo pipefail
 contents="${0:A:h:h:h}"
 dir='/Library/Application Support/BatterySaver'
 helper="$dir/battery-saver-helper"
-plist='/Library/LaunchDaemons/local.paolo.battery-saver.plist'
+plist='/Library/LaunchDaemons/org.batterysaver.helper.plist'
 status_path="$dir/status.json"
 settings_path="$dir/settings.json"
 candidate="$contents/Helpers/battery-saver-helper"
@@ -165,7 +165,7 @@ wait_status() {
 
 ensure_stopped() {
     # launchd must have relinquished the service before we test the process lock.
-    if /bin/launchctl print system/local.paolo.battery-saver >/dev/null 2>&1; then return 1; fi
+    if /bin/launchctl print system/org.batterysaver.helper >/dev/null 2>&1; then return 1; fi
     for attempt in {1..50}; do
         if "$candidate" --check-stopped >/dev/null 2>&1; then return 0; fi
         /bin/sleep 0.1
@@ -205,7 +205,7 @@ protected "$settings_path"
 settings_changed=1
 /bin/mv -f "$work/migrated-settings" "$settings_path"
 /bin/mv -f "$work/replacement" "$helper"
-/usr/bin/install -o root -g wheel -m 644 "$contents/Resources/local.paolo.battery-saver.plist" "$plist"
+/usr/bin/install -o root -g wheel -m 644 "$contents/Resources/org.batterysaver.helper.plist" "$plist"
 /usr/bin/touch "$work/marker"
 /bin/launchctl bootstrap system "$plist"
 confirm_started

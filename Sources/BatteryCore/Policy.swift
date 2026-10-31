@@ -107,7 +107,8 @@ public struct HelperStatus: Codable, Equatable {
     public var dischargeCommandID: UUID?
     public var dischargeCommandError: String?
     public var sleepMessage: String?
-    public var isCurrent: Bool { running && error == nil && (-5...30).contains(Date().timeIntervalSince(date)) }
+    public var isRecentRuntime: Bool { running && (-5...30).contains(Date().timeIntervalSince(date)) }
+    public var isCurrent: Bool { isRecentRuntime && error == nil }
     public init(date: Date = Date(), state: String, error: String?, settings: Settings, sample: BatterySample?, backend: String, chargingAllowed: Bool?, calibrationActive: Bool = false, running: Bool = true, sleepControlAvailable: Bool = false, sleepHeld: Bool = false, sleepMessage: String? = nil) {
         self.date = date; self.state = state; self.error = error; self.settings = settings
         self.sample = sample; self.backend = backend; self.chargingAllowed = chargingAllowed
@@ -148,7 +149,9 @@ public enum Locations {
     public static let settings = directory + "/settings.json"
     public static let status = directory + "/status.json"
     public static let helper = directory + "/battery-saver-helper"
-    public static let label = "local.paolo.battery-saver"
+    public static func readStatus() throws -> HelperStatus {
+        try JSONDecoder().decode(HelperStatus.self, from: Data(contentsOf: URL(fileURLWithPath: status)))
+    }
     public static func readSettings() throws -> Settings {
         let value = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: URL(fileURLWithPath: settings)))
         try value.validate()

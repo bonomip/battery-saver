@@ -18,9 +18,8 @@ final class HelperAppSession {
         self.completion = completion
         let id = UUID()
         generation = id
-        let connection = NSXPCConnection(machServiceName: HelperSessionService.name, options: .privileged)
+        let connection = HelperSessionService.connection()
         self.connection = connection
-        connection.remoteObjectInterface = NSXPCInterface(with: HelperSessionProtocol.self)
         connection.invalidationHandler = { [weak self] in
             DispatchQueue.main.async { self?.failed(id, "The helper connection closed.") }
         }
@@ -33,7 +32,7 @@ final class HelperAppSession {
             DispatchQueue.main.async {
                 guard let self = self, self.generation == id else { return }
                 guard let data = data, let version = try? JSONDecoder().decode(HelperVersion.self, from: data),
-                      HelperUpgrade.assess(installed: true, version: version, runningVersion: version) == .ready,
+                      version.canStartAppSession,
                       error == nil else {
                     self.failed(id, error ?? "The activated helper is incompatible."); return
                 }

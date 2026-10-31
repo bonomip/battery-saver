@@ -2,7 +2,7 @@
 set -euo pipefail
 (( EUID == 0 )) || { print -u2 'Administrator authorization is required.'; exit 1; }
 dir='/Library/Application Support/BatterySaver'
-label='local.paolo.battery-saver'
+label='org.batterysaver.helper'
 helper="$dir/battery-saver-helper"
 [[ -f "$helper" && ! -L "$dir" && ! -L "$helper" ]] || { print -u2 'No valid helper installation found.'; exit 1; }
 # Disable the policy without a second process writing hardware. Stop the daemon

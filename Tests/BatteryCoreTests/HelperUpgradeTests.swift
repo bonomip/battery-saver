@@ -2,6 +2,27 @@ import XCTest
 @testable import BatteryCore
 
 final class HelperUpgradeTests: XCTestCase {
+    func testSessionStartupRejectsUnsupportedInstalledVersions() {
+        let current = HelperVersion.current
+        XCTAssertTrue(current.canStartAppSession)
+        XCTAssertFalse(HelperVersion(revision: current.revision - 1, protocolVersion: current.protocolVersion, settingsSchema: current.settingsSchema).canStartAppSession)
+        XCTAssertFalse(HelperVersion(revision: current.revision, protocolVersion: current.protocolVersion + 1, settingsSchema: current.settingsSchema).canStartAppSession)
+        XCTAssertFalse(HelperVersion(revision: current.revision, protocolVersion: current.protocolVersion, settingsSchema: current.settingsSchema + 1).canStartAppSession)
+    }
+    func testRecentRuntimeIsDistinctFromHealthyStatus() {
+        var status = HelperStatus(state: "Error", error: "Sensor unavailable", settings: Settings(), sample: nil,
+                                  backend: "test", chargingAllowed: nil)
+        XCTAssertTrue(status.isRecentRuntime)
+        XCTAssertFalse(status.isCurrent)
+        status.error = nil
+        XCTAssertTrue(status.isCurrent)
+        status.date = Date().addingTimeInterval(-60)
+        XCTAssertFalse(status.isRecentRuntime)
+        status.date = Date().addingTimeInterval(60)
+        XCTAssertFalse(status.isRecentRuntime)
+        status.date = Date(); status.running = false
+        XCTAssertFalse(status.isRecentRuntime)
+    }
     func testFreshInstallationAndNoUpdateNeeded() {
         XCTAssertEqual(HelperUpgrade.assess(installed: false, version: nil, runningVersion: nil), .missing)
         XCTAssertEqual(HelperUpgrade.assess(installed: true, version: .current, runningVersion: .current), .ready)

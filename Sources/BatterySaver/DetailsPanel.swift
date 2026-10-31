@@ -10,7 +10,6 @@ struct Panel: View {
     @State private var showCapacity = false
     @State private var showLimitsInfo = false
     private var stateAccent: Color { model.palette.accent }
-    private var calibrating: Bool { model.status?.isCurrent == true && model.status?.calibrationActive == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -51,7 +50,7 @@ struct Panel: View {
         .buttonStyle(SecondaryActionStyle())
         .alert("Start battery calibration?", isPresented: $showCalibration) {
             Button("Cancel", role: .cancel) {}
-            Button("Start calibration") { model.authorize(["--calibrate"]) }
+            Button("Start calibration") { model.startCalibration() }
         } message: {
             Text("Keep your Mac open and connected to power. It will discharge to 15%, charge to 100%, hold for one hour, then restore your limits. This can take several hours. Sleep, heat, a helper restart, or losing the charger during recharge cancels calibration. It does not restore lost battery capacity.")
         }
@@ -180,9 +179,7 @@ struct Panel: View {
                     }
                     if model.helperInstalled {
                         Button { showUninstall = true } label: {
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 16, weight: .medium))
-                                .frame(width: 30, height: 30)
+                            ToolbarIcon(symbol: "gearshape")
                         }
                         .buttonStyle(.plain).accessibilityLabel("Helper settings")
                         .help("Manage the background helper").disabled(model.saving)
@@ -204,35 +201,29 @@ struct Panel: View {
             operationLabel(title: target != nil ? "Cancel discharge" : "Discharge to limit",
                 detail: target.map { "Running from battery to \($0)%." } ?? "Use battery power down to your saved limit.",
                 symbol: target != nil ? "stop.circle" : "battery.50", active: target != nil,
-                tint: stateAccent,
                 iconImage: target != nil ? nil : MenuBarBatteryIcon.image(
                     percent: model.sample?.percent, activity: .onBattery, tone: model.batteryTone,
                     appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!))
         }
         .buttonStyle(OperationTileStyle(tint: stateAccent))
         .help("Runs once to the saved limit. Cancels on sleep, heat, settings changes, after eight hours, or 30 minutes without progress. Keep the charger attached; adapter control can hide unplug detection.")
-        .disabled(model.saving || !model.helperCompatible || (target == nil &&
-            (model.sample?.externalPower != true || model.dischargePending || model.status?.dischargeSupported != true ||
-             !model.protectionVerified || model.hasDraft || model.awaitingSettings || calibrating ||
-             (model.sample?.percent ?? 0) <= (model.status?.settings.upper ?? 100))))
+        .disabled(!model.canControlHelper || (target == nil && !model.canStartDischarge))
     }
 
     private var calibration: some View {
         Button {
-            if calibrating { model.authorize(["--cancel-calibration"]) } else { showCalibration = true }
+            if model.calibrating { model.authorize(["--cancel-calibration"]) } else { showCalibration = true }
         } label: {
-            operationLabel(title: calibrating ? "Cancel calibration" : "Calibrate",
-                detail: calibrating ? (model.status?.state ?? "Calibration in progress") : "Recheck charge readings. Takes several hours.",
-                symbol: calibrating ? "stop.circle" : "arrow.triangle.2.circlepath", active: calibrating,
-                tint: stateAccent)
+            operationLabel(title: model.calibrating ? "Cancel calibration" : "Calibrate",
+                detail: model.calibrating ? (model.status?.state ?? "Calibration in progress") : "Recheck charge readings. Takes several hours.",
+                symbol: model.calibrating ? "stop.circle" : "arrow.triangle.2.circlepath", active: model.calibrating)
         }
         .buttonStyle(OperationTileStyle(tint: stateAccent))
         .help("For inaccurate charge readings. Adds battery wear and does not restore lost capacity. Keep the lid open and charger connected.")
-        .disabled(model.saving || !model.helperCompatible || (!calibrating &&
-            (!model.protectionVerified || model.status?.dischargeTarget != nil || model.hasDraft || model.awaitingSettings)))
+        .disabled(!model.canControlHelper || (!model.calibrating && !model.canStartCalibration))
     }
 
-    private func operationLabel(title: String, detail: String, symbol: String, active: Bool, tint: Color, iconImage: NSImage? = nil) -> some View {
+    private func operationLabel(title: String, detail: String, symbol: String, active: Bool, iconImage: NSImage? = nil) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 Group {
@@ -240,11 +231,11 @@ struct Panel: View {
                         Image(nsImage: iconImage).renderingMode(.original)
                     } else {
                         Image(systemName: symbol).font(.system(size: 19, weight: .medium))
-                            .foregroundColor(tint)
+                            .foregroundColor(stateAccent)
                     }
                 }
                     .frame(width: 34, height: 34)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(tint.opacity(0.12)))
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(stateAccent.opacity(0.12)))
                 Spacer()
                 Image(systemName: active ? "xmark" : "chevron.right")
                     .font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
@@ -317,89 +308,7 @@ struct Panel: View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color(AppPalette.surface)))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.07), lineWidth: 1))
+            .cardSurface(cornerRadius: 14)
             .shadow(color: .black.opacity(0.035), radius: 3, y: 2)
-    }
-}
-
-struct OperationTileStyle: ButtonStyle {
-    let tint: Color
-    @Environment(\.isEnabled) private var enabled
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundColor(.primary)
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(LinearGradient(
-                colors: [tint.opacity(enabled && configuration.isPressed ? 0.18 : (enabled && hovered ? 0.12 : 0.05)), tint.opacity(0.015)],
-                startPoint: .topLeading, endPoint: .bottomTrailing)))
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(AppPalette.surface)))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
-                enabled && hovered ? tint.opacity(0.4) : Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1))
-            .shadow(color: .black.opacity(enabled ? 0.04 : 0.015), radius: configuration.isPressed ? 1 : 4, y: configuration.isPressed ? 0 : 2)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
-            .opacity(enabled ? 1 : 0.55)
-            .onHover { hovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovered)
-    }
-}
-
-/// A button-backed switch keeps state coloring consistent on macOS 12.
-struct StateSwitchStyle: ToggleStyle {
-    let tint: Color
-    var labelHidden = false
-    @Environment(\.isEnabled) private var enabled
-    @Environment(\.colorScheme) private var colorScheme
-
-    /// Choose the higher-contrast endpoint using sRGB relative luminance.
-    private func thumbColor(for track: Color) -> Color {
-        let appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!
-        return Color(AppPalette.foreground(on: NSColor(track), appearance: appearance))
-    }
-    func makeBody(configuration: Configuration) -> some View {
-        let track = configuration.isOn ? tint : AppPalette.inactiveTrack
-        return Button { configuration.isOn.toggle() } label: {
-            HStack(spacing: 8) {
-                if !labelHidden {
-                    configuration.label
-                    Spacer(minLength: 8)
-                }
-                Capsule().fill(track)
-                    .overlay(Capsule().stroke(Color.primary.opacity(0.65), lineWidth: 1))
-                    .frame(width: 34, height: 20)
-                    .overlay(Circle().fill(thumbColor(for: track)).frame(width: 14, height: 14)
-                        .offset(x: configuration.isOn ? 7 : -7))
-            }.contentShape(Rectangle())
-        }.buttonStyle(.plain)
-            .accessibilityValue(configuration.isOn ? "On" : "Off")
-            .opacity(enabled ? 1 : 0.45)
-    }
-}
-
-struct StateActionStyle: ButtonStyle {
-    let tint: Color
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 12, weight: .semibold))
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .foregroundColor(.primary)
-            .background(RoundedRectangle(cornerRadius: 8).fill(tint.opacity(enabled ? (configuration.isPressed ? 0.65 : 0.35) : 0.1)))
-            .opacity(enabled ? 1 : 0.5)
-    }
-}
-
-struct SecondaryActionStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(configuration.isPressed ? 0.14 : 0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.1), lineWidth: 0.5))
-            .opacity(enabled ? 1 : 0.4)
     }
 }

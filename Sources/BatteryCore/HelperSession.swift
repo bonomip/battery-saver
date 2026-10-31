@@ -8,5 +8,13 @@ import Foundation
 }
 
 public enum HelperSessionService {
-    public static let name = "local.paolo.battery-saver.session"
+    public static let name = AppIdentity.session
+    public static func interface() -> NSXPCInterface {
+        NSXPCInterface(with: HelperSessionProtocol.self)
+    }
+    public static func connection() -> NSXPCConnection {
+        let connection = NSXPCConnection(machServiceName: name, options: .privileged)
+        connection.remoteObjectInterface = interface()
+        return connection
+    }
 }

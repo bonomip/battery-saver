@@ -21,7 +21,7 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
         guard stat("/dev/console", &console) == 0,
               connection.effectiveUserIdentifier == 0 || connection.effectiveUserIdentifier == console.st_uid else { return false }
         let endpoint = SessionEndpoint(service: self)
-        connection.exportedInterface = NSXPCInterface(with: HelperSessionProtocol.self)
+        connection.exportedInterface = HelperSessionService.interface()
         connection.exportedObject = endpoint
         connection.invalidationHandler = { [weak self] in
             DispatchQueue.main.async {
@@ -106,8 +106,7 @@ fileprivate final class SessionEndpoint: NSObject, HelperSessionProtocol {
 
 /// Used by the root installer/updater to verify Mach-service activation without enabling policy.
 func checkSessionService() throws {
-    let connection = NSXPCConnection(machServiceName: HelperSessionService.name, options: .privileged)
-    connection.remoteObjectInterface = NSXPCInterface(with: HelperSessionProtocol.self)
+    let connection = HelperSessionService.connection()
     var finished = false
     var failure: String?
     connection.resume()

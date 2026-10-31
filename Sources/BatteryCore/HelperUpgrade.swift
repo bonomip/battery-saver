@@ -5,9 +5,13 @@ public struct HelperVersion: Codable, Equatable {
     public let revision: Int
     public let protocolVersion: Int
     public let settingsSchema: Int
-    public static let current = HelperVersion(revision: 3, protocolVersion: 2, settingsSchema: 1)
+    public static let current = HelperVersion(revision: 5, protocolVersion: 4, settingsSchema: 1)
     public init(revision: Int, protocolVersion: Int, settingsSchema: Int) {
         self.revision = revision; self.protocolVersion = protocolVersion; self.settingsSchema = settingsSchema
+    }
+    public var supportsAppSession: Bool { protocolVersion >= 2 }
+    public var canStartAppSession: Bool {
+        supportsAppSession && HelperUpgrade.assess(installed: true, version: self, runningVersion: self) == .ready
     }
     public static func read(executable: String) throws -> HelperVersion {
         let output = try PMSetSleepSetting.run(executable, ["--version-json"], 2)

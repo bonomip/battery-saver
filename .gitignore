@@ -5,6 +5,7 @@
 
 # Generated screenshots, logs and machine-specific battery diagnostics
 /tmp/
+NOTES.md
 
 # macOS and editor state
 .DS_Store

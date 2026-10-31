@@ -6,7 +6,7 @@ enum MenuBarBatteryIcon {
     static func image(percent: Int?, activity: BatteryActivity, tone: BatteryTone, appearance: NSAppearance) -> NSImage {
         let image = NSImage(size: NSSize(width: 28, height: 18), flipped: false) { _ in
             appearance.performAsCurrentDrawingAppearance {
-                let outline = outlineColor(appearance: appearance)
+                let outline = AppPalette.outline(appearance: appearance)
                 let body = NSBezierPath(roundedRect: NSRect(x: 1, y: 3.5, width: 23, height: 11),
                                         xRadius: 2.5, yRadius: 2.5)
                 outline.setStroke()
@@ -57,7 +57,4 @@ enum MenuBarBatteryIcon {
         return image
     }
 
-    static func outlineColor(appearance: NSAppearance) -> NSColor {
-        AppPalette.outline(appearance: appearance)
-    }
 }

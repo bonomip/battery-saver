@@ -33,15 +33,11 @@ let requestPath = Locations.directory + "/calibration-request.json"
 let recoveryPath = Locations.directory + "/adapter-recovery.json"
 let sleepRecoveryPath = Locations.directory + "/sleep-recovery.json"
 
-func readCalibrationCommand() -> CalibrationCommand? {
-    (try? Data(contentsOf: URL(fileURLWithPath: requestPath))).flatMap {
-        try? JSONDecoder().decode(CalibrationCommand.self, from: $0)
-    }
-}
-
 let dischargeRequestPath = Locations.directory + "/discharge-request.json"
-func readDischargeCommand() -> DischargeCommand? {
-    (try? Data(contentsOf: URL(fileURLWithPath: dischargeRequestPath))).flatMap { try? JSONDecoder().decode(DischargeCommand.self, from: $0) }
+
+func readRequest<T: Decodable>(at path: String) -> T? {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+    return try? JSONDecoder().decode(T.self, from: data)
 }
 
 final class Daemon {
@@ -58,12 +54,12 @@ final class Daemon {
         let needsRecovery = try recoveryStore.read()
         let gate = try ChargeGate()
         controller = HelperController(hardware: gate, backend: gate.backend,
-                                      existingCommand: readCalibrationCommand(),
+                                      existingCommand: readRequest(at: requestPath),
                                       readSettings: Locations.readSettings, readBattery: BatteryReader.read,
-                                      checkConflict: conflicts, readCommand: readCalibrationCommand,
+                                      checkConflict: conflicts, readCommand: { readRequest(at: requestPath) },
                                       adapterRecoveryRequired: needsRecovery,
                                       persistAdapterRecovery: recoveryStore.write,
-                                      existingDischarge: readDischargeCommand(), readDischarge: readDischargeCommand)
+                                      existingDischarge: readRequest(at: dischargeRequestPath), readDischarge: { readRequest(at: dischargeRequestPath) })
     }
     @discardableResult func publish(_ status: HelperStatus) -> HelperStatus {
         var output = status
@@ -156,13 +152,7 @@ do {
         // A second launch must never overwrite the live daemon's status.
         let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
         defer { withExtendedLifetime(lock) {} }
-        do { AppSessionService().run() }
-        catch {
-            try? writeJSON(HelperStatus(state: "Helper could not start", error: error.localizedDescription,
-                                       settings: Settings(enabled: false), sample: nil, backend: "Unavailable",
-                                       chargingAllowed: nil, running: false), path: Locations.status)
-            throw error
-        }
+        AppSessionService().run()
     case "--configure":
         try checkRootDirectory()
         guard (arguments.count == 6 || arguments.count == 7), let enabled = Int(arguments[1]), [0, 1].contains(enabled),

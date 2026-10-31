@@ -120,7 +120,7 @@ for scenario in ("fresh", "legacy", "older", "same", "rollback", "newer", "futur
         candidate = helpers / "battery-saver-helper"
         candidate.write_bytes(new); candidate.chmod(0o755)
         plist = root / "daemon.plist"
-        (resources / "local.paolo.battery-saver.plist").write_text("fixture")
+        (resources / "org.batterysaver.helper.plist").write_text("fixture")
         settings = dict(enabled=True, lower=70, upper=85, heatPause=40, heatResume=36, customNote="preserve")
         if scenario == "future-settings": settings["schemaVersion"] = version["settingsSchema"] + 1
         if scenario == "invalid-settings": settings["lower"] = 99
@@ -161,7 +161,7 @@ with (installed / "launches.log").open("a") as log:
         ).replace(
             "dir='/Library/Application Support/BatterySaver'", "dir=" + shlex.quote(str(installed))
         ).replace(
-            "plist='/Library/LaunchDaemons/local.paolo.battery-saver.plist'", "plist=" + shlex.quote(str(plist))
+            "plist='/Library/LaunchDaemons/org.batterysaver.helper.plist'", "plist=" + shlex.quote(str(plist))
         ).replace(
             '[[ "$owner" == 0 ]]', f'[[ "$owner" == {os.geteuid()} ]]'
         ).replace('/usr/bin/codesign', '/usr/bin/true').replace(

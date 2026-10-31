@@ -2,7 +2,7 @@ import Foundation
 
 /// A per-user LaunchAgent for the menu app on macOS 12. The system helper is separate.
 public struct LoginStartup {
-    public static let label = "local.paolo.battery-saver.login"
+    public static let label = AppIdentity.login
     public let directory: URL
     public var file: URL { directory.appendingPathComponent(Self.label + ".plist") }
 

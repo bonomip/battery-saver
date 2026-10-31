@@ -4,7 +4,7 @@ set -euo pipefail
 contents="${0:A:h:h:h}"
 dir='/Library/Application Support/BatterySaver'
 helper="$contents/Helpers/battery-saver-helper"
-plist='/Library/LaunchDaemons/local.paolo.battery-saver.plist'
+plist='/Library/LaunchDaemons/org.batterysaver.helper.plist'
 [[ -f "$helper" ]] || { print -u2 'The helper is missing from the app bundle.'; exit 1; }
 [[ ! -e "$dir" && ! -L "$dir" && ! -e "$plist" && ! -L "$plist" ]] || {
     print -u2 'An installation or conflicting path already exists. Use the bundled updater for an existing helper; inspect conflicting paths.'; exit 1
@@ -19,7 +19,7 @@ schema=$(print -r -- "$version" | /usr/bin/plutil -extract settingsSchema raw -o
 /usr/bin/install -o root -g wheel -m 755 "$helper" "$dir/battery-saver-helper"
 # Start disabled; never take over charging implicitly during installation.
 "$dir/battery-saver-helper" --configure 0 75 80 38 35
-/usr/bin/install -o root -g wheel -m 644 "$contents/Resources/local.paolo.battery-saver.plist" "$plist"
+/usr/bin/install -o root -g wheel -m 644 "$contents/Resources/org.batterysaver.helper.plist" "$plist"
 /bin/launchctl bootstrap system "$plist"
 if (( protocol >= 2 )); then
     "$dir/battery-saver-helper" --check-service
