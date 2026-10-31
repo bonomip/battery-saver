@@ -71,6 +71,7 @@ struct Panel: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Settings & details").font(.system(size: 22, weight: .semibold))
+                    .modifier(SettingsRiddleEasterEgg(tint: green))
                 Text("Charge limits, health and calibration.").font(.callout).foregroundColor(.secondary)
             }
             Spacer()

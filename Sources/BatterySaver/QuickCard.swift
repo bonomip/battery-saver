@@ -176,7 +176,8 @@ struct QuickCard: View {
                         .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(.primary)
                         .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(tint.opacity(0.12)))
+                        .background(RoundedRectangle(cornerRadius: 7).fill(tint.opacity(colorScheme == .dark ? 0.38 : 0.22)))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(tint.opacity(0.55), lineWidth: 1))
                     Text(model.status?.dischargeTarget.map { "Discharging to \($0)%" } ?? model.estimate ?? pausedDetail).font(.system(size: 12))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -190,7 +191,8 @@ struct QuickCard: View {
 
         }
         .padding(18).frame(width: Self.width, height: Self.height)
-        .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.25 : 0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.14 : 0.08), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .background(Color(NSColor.windowBackgroundColor).opacity(colorScheme == .dark ? 0.9 : 0.96))
         .background(StatusMaterial(borderColors: borderColors, hovered: hovered, variant: borderVariant,
             animated: !reduceMotion, easterEggs: easterEggs,
             aurora: easterEggs.aurora && easterEggs.auroraRequested, boltID: easterEggs.boltID))

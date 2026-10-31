@@ -247,3 +247,77 @@ final class NativeStatusEasterEggs {
         boltLayer.add(group, forKey: "secretCharge")
     }
 }
+
+struct SettingsRiddleEasterEgg: ViewModifier {
+    let tint: Color
+    @State private var revealed = false
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if NSEvent.modifierFlags.contains(.option) { revealed.toggle() }
+            }
+            .accessibilityAction(named: Text("Solve a riddle")) { revealed = true }
+            .popover(isPresented: $revealed) { SettingsRiddle(tint: tint) }
+    }
+}
+
+private struct SettingsRiddle: View {
+    let tint: Color
+    private let riddles: [(question: String, answers: Set<String>)] = [
+        ("I have cells and get charged, but never go to court. What am I?", ["battery"]),
+        ("I disappear as you use me and return when you plug in. What am I?", ["charge", "power", "energy", "battery charge"]),
+        ("I travel through wires but never take a step. What am I?", ["electricity", "current", "electric current"])
+    ]
+    @State private var index = 0
+    @State private var answer = ""
+    @State private var solved = false
+    @State private var feedback = ""
+    @FocusState private var answerFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("A little brain charge", systemImage: "lightbulb.fill")
+                .font(.headline).foregroundColor(tint)
+            Text(riddles[index].question).font(.callout).fixedSize(horizontal: false, vertical: true)
+            if solved {
+                Label("Secret unlocked. No charger required.", systemImage: "sparkles")
+                    .font(.callout).foregroundColor(tint)
+                Button("Next riddle") {
+                    index = (index + Int.random(in: 1..<riddles.count)) % riddles.count
+                    answer = ""; feedback = ""; solved = false; answerFocused = true
+                }
+            } else {
+                TextField("Your answer", text: $answer)
+                    .textFieldStyle(.roundedBorder).focused($answerFocused)
+                    .onSubmit { checkAnswer() }
+                    .onChange(of: answer) { _ in feedback = "" }
+                if !feedback.isEmpty { Text(feedback).font(.caption).foregroundColor(.secondary) }
+                HStack {
+                    Text("A secret tucked into Settings.").font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                    Button("Check answer") { checkAnswer() }
+                        .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(18).frame(width: 330)
+        .onAppear {
+            index = Int.random(in: riddles.indices)
+            answerFocused = true
+        }
+    }
+
+    private func checkAnswer() {
+        var normalized = answer.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        for article in ["a ", "an ", "the "] {
+            if normalized.hasPrefix(article) { normalized.removeFirst(article.count); break }
+        }
+        if riddles[index].answers.contains(normalized) {
+            solved = true; feedback = ""
+        } else {
+            feedback = "Not quite. Try again."
+            answerFocused = true
+        }
+    }
+}

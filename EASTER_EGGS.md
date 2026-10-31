@@ -1,6 +1,7 @@
 # Easter eggs
 
-Open the status card by clicking the menu bar battery icon.
+Open the status card by clicking the menu bar battery icon. The riddle is in the
+Settings window.
 
 | Easter egg | Trigger | Effect |
 | --- | --- | --- |
@@ -9,6 +10,7 @@ Open the status card by clicking the menu bar battery icon.
 | Secret charge | Click “Battery Saver” seven times, with no more than two seconds between clicks. | A lightning bolt circles the border once over three seconds. |
 | Night shift | Click Temperature between midnight and 5 a.m., local time. | A sleepy moon appears for four seconds. |
 | Tiny heartbeat | Hold the battery ring for two seconds. | Two slower pulses and a heart, lasting about three seconds. |
+| Settings riddle | Option-click the “Settings & details” heading in Settings. | Solve an energy-themed riddle to reveal a secret message. “Next riddle” offers another. |
 
-All effects are cosmetic and stop when the card closes. Reduce Motion replaces
+All effects are cosmetic. Status effects stop when the card closes. Reduce Motion replaces
 moving effects with static feedback.
