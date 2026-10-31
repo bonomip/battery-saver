@@ -51,9 +51,9 @@ final class QuickCardHost: NSHostingView<QuickCard> {
         easterEggs.layout(in: layer, borderGradient: borderGradient)
         borderMask.fillColor = NSColor.clear.cgColor
         borderMask.strokeColor = NSColor.white.cgColor
-        borderMask.lineWidth = 2
-        borderMask.path = CGPath(roundedRect: borderMask.bounds.insetBy(dx: 1, dy: 1),
-            cornerWidth: QuickCard.cornerRadius - 1, cornerHeight: QuickCard.cornerRadius - 1, transform: nil)
+        borderMask.lineWidth = 1
+        borderMask.path = CGPath(roundedRect: borderMask.bounds.insetBy(dx: 0.5, dy: 0.5),
+            cornerWidth: QuickCard.cornerRadius - 0.5, cornerHeight: QuickCard.cornerRadius - 0.5, transform: nil)
         CATransaction.commit()
     }
     func setBorder(colors: [NSColor], hovered: Bool, variant: Int, animated: Bool) {
@@ -143,20 +143,25 @@ struct QuickCard: View {
         guard status.settings.enabled else { return "Off" }
         return "\(status.settings.upper)%"
     }
-    private var tint: Color {
-        Color(MenuBarBatteryIcon.color(model.batteryTone))
+    private var accent: NSColor {
+        MenuBarBatteryIcon.color(model.batteryTone)
+    }
+    private var tint: Color { Color(accent) }
+    private var badgeTextColor: Color {
+        switch model.batteryTone {
+        case .neutral: return Color(NSColor.windowBackgroundColor)
+        case .blue: return .white
+        default: return Color(red: 0.06, green: 0.14, blue: 0.13)
+        }
     }
     private var borderColors: [NSColor] {
-        let color = MenuBarBatteryIcon.color(model.batteryTone)
-        return [.black.withAlphaComponent(hovered ? (colorScheme == .dark ? 0.8 : 0.6) : 0.95),
-                color.blended(withFraction: hovered ? 0.35 : 0.95, of: .black) ?? .black,
-                .black.withAlphaComponent(hovered ? (colorScheme == .dark ? 0.9 : 0.7) : 1)]
+        let edge = colorScheme == .dark ? NSColor.white.withAlphaComponent(0.15) : NSColor.black.withAlphaComponent(0.1)
+        return [edge, hovered ? accent.withAlphaComponent(0.55) : edge, edge]
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "battery.75").foregroundColor(tint)
                 Text("Battery Saver").font(.system(size: 13, weight: .semibold))
                     .modifier(SecretChargeEasterEgg(effects: easterEggs))
                 Spacer()
@@ -169,30 +174,33 @@ struct QuickCard: View {
                 }
             }
             HStack(spacing: 18) {
-                BatteryRing(model: model, size: 96, showsReading: !easterEggs.winking)
+                BatteryRing(model: model, size: 104, showsReading: !easterEggs.winking,
+                    accent: tint, track: Color.primary.opacity(0.1))
                     .modifier(BatteryRingEasterEgg(effects: easterEggs, tint: tint))
                 VStack(alignment: .leading, spacing: 10) {
                     Text(model.activity.title).font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                        .foregroundColor(.primary)
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(tint.opacity(colorScheme == .dark ? 0.38 : 0.22)))
-                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(tint.opacity(0.55), lineWidth: 1))
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        .foregroundColor(badgeTextColor)
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Capsule().fill(tint))
                     Text(model.status?.dischargeTarget.map { "Discharging to \($0)%" } ?? model.estimate ?? pausedDetail).font(.system(size: 12))
+                        .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12)
                 }
                 Spacer(minLength: 0)
             }
+            Divider().opacity(0.6)
             HStack(spacing: 10) {
-                metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature")
+                metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature", symbol: "thermometer")
                     .modifier(NightShiftEasterEgg(effects: easterEggs, tint: tint))
-                metric(limit, label: "Charge limit")
+                metric(limit, label: "Charge limit", symbol: "battery.75")
             }
 
         }
-        .padding(18).frame(width: Self.width, height: Self.height)
-        .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.14 : 0.08), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
-        .background(Color(NSColor.windowBackgroundColor).opacity(colorScheme == .dark ? 0.9 : 0.96))
+        .padding(.horizontal, 18).padding(.vertical, 14)
+        .frame(width: Self.width, height: Self.height)
+        .background(Color(NSColor.windowBackgroundColor))
         .background(StatusMaterial(borderColors: borderColors, hovered: hovered, variant: borderVariant,
             animated: !reduceMotion, easterEggs: easterEggs,
             aurora: easterEggs.aurora && easterEggs.auroraRequested, boltID: easterEggs.boltID))
@@ -211,14 +219,18 @@ struct QuickCard: View {
         return "Resumes at \(status.settings.lower)%"
     }
 
-    private func metric(_ value: String, label: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 11)).foregroundColor(.secondary)
-            Text(value).font(.system(size: 16, weight: .semibold, design: .rounded)).monospacedDigit()
+    private func metric(_ value: String, label: String, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 20, weight: .regular))
+                .foregroundColor(.secondary).frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label).font(.system(size: 11)).foregroundColor(.secondary)
+                Text(value).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+            }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(NSColor.controlBackgroundColor).opacity(0.8)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.5), lineWidth: 0.5))
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.07), radius: 4, y: 2)
+            .background(RoundedRectangle(cornerRadius: 10).fill(colorScheme == .dark
+                ? Color.white.opacity(0.045) : Color.black.opacity(0.025)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
     }
 }
 
@@ -226,10 +238,12 @@ struct BatteryRing: View {
     @ObservedObject var model: BatteryModel
     let size: CGFloat
     var showsReading = true
-    private var tint: Color { Color(MenuBarBatteryIcon.color(model.batteryTone)) }
+    var accent: Color? = nil
+    var track: Color? = nil
+    private var tint: Color { accent ?? Color(MenuBarBatteryIcon.color(model.batteryTone)) }
     var body: some View {
         ZStack {
-            Circle().stroke(tint.opacity(0.13), lineWidth: size * 0.075)
+            Circle().stroke(track ?? tint.opacity(0.13), lineWidth: size * 0.075)
             Circle().trim(from: 0, to: CGFloat(min(100, max(0, model.sample?.percent ?? 0))) / 100)
                 .stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round))
                 .rotationEffect(.degrees(-90))

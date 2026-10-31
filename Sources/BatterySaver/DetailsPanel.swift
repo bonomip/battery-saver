@@ -4,6 +4,7 @@ import BatteryCore
 
 struct Panel: View {
     @ObservedObject var model: BatteryModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showCalibration = false
     @State private var showUninstall = false
     @State private var showCapacity = false
@@ -195,7 +196,11 @@ struct Panel: View {
         } label: {
             operationLabel(title: target != nil ? "Cancel discharge" : "Discharge to limit",
                 detail: target.map { "Running from battery to \($0)%." } ?? "Use battery power down to your saved limit.",
-                symbol: target != nil ? "stop.circle" : "battery.50", active: target != nil)
+                symbol: target != nil ? "stop.circle" : "battery.50", active: target != nil,
+                tint: target != nil ? .orange : green,
+                iconImage: target != nil ? nil : MenuBarBatteryIcon.image(
+                    percent: model.sample?.percent, activity: .onBattery, tone: model.batteryTone,
+                    appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!))
         }
         .buttonStyle(OperationTileStyle(tint: target != nil ? .orange : green))
         .help("Runs once to the saved limit. Cancels on sleep, heat, settings changes, after eight hours, or 30 minutes without progress. Keep the charger attached; adapter control can hide unplug detection.")
@@ -211,20 +216,31 @@ struct Panel: View {
         } label: {
             operationLabel(title: calibrating ? "Cancel calibration" : "Calibrate",
                 detail: calibrating ? (model.status?.state ?? "Calibration in progress") : "Recheck charge readings. Takes several hours.",
-                symbol: calibrating ? "stop.circle" : "arrow.triangle.2.circlepath", active: calibrating)
+                symbol: calibrating ? "stop.circle" : "arrow.triangle.2.circlepath", active: calibrating,
+                tint: calibrating ? .orange : .cyan)
         }
-        .buttonStyle(OperationTileStyle(tint: calibrating ? .orange : green))
+        .buttonStyle(OperationTileStyle(tint: calibrating ? .orange : .cyan))
         .help("For inaccurate charge readings. Adds battery wear and does not restore lost capacity. Keep the lid open and charger connected.")
         .disabled(model.saving || !model.helperCompatible || (!calibrating &&
             (!model.protectionVerified || model.status?.dischargeTarget != nil || model.hasDraft || model.awaitingSettings)))
     }
 
-    private func operationLabel(title: String, detail: String, symbol: String, active: Bool) -> some View {
+    private func operationLabel(title: String, detail: String, symbol: String, active: Bool, tint: Color, iconImage: NSImage? = nil) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Image(systemName: symbol).font(.system(size: 21, weight: .medium))
+                Group {
+                    if let iconImage = iconImage {
+                        Image(nsImage: iconImage).renderingMode(.original)
+                    } else {
+                        Image(systemName: symbol).font(.system(size: 19, weight: .medium))
+                            .foregroundColor(tint)
+                    }
+                }
+                    .frame(width: 34, height: 34)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(tint.opacity(0.12)))
                 Spacer()
-                Image(systemName: active ? "xmark" : "chevron.right").font(.caption.weight(.semibold))
+                Image(systemName: active ? "xmark" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold)).foregroundColor(.secondary)
             }
             Text(title).font(.headline).lineLimit(2)
             Text(detail).font(.caption).foregroundColor(.secondary)
@@ -303,19 +319,23 @@ struct Panel: View {
 struct OperationTileStyle: ButtonStyle {
     let tint: Color
     @Environment(\.isEnabled) private var enabled
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundColor(.primary)
             .padding(14)
-            .background(RoundedRectangle(cornerRadius: 14).fill(LinearGradient(
-                colors: [tint.opacity(configuration.isPressed ? 0.3 : (hovered ? 0.21 : 0.14)), tint.opacity(0.06)],
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(LinearGradient(
+                colors: [tint.opacity(enabled && configuration.isPressed ? 0.18 : (enabled && hovered ? 0.12 : 0.05)), tint.opacity(0.015)],
                 startPoint: .topLeading, endPoint: .bottomTrailing)))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(configuration.isPressed ? 0.65 : 0.23), lineWidth: 1))
-            .shadow(color: .black.opacity(enabled ? 0.07 : 0.02), radius: configuration.isPressed ? 1 : 5, y: configuration.isPressed ? 0 : 3)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
+                enabled && hovered ? tint.opacity(0.4) : Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1))
+            .shadow(color: .black.opacity(enabled ? 0.04 : 0.015), radius: configuration.isPressed ? 1 : 4, y: configuration.isPressed ? 0 : 2)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
-            .opacity(enabled ? 1 : 0.45)
+            .opacity(enabled ? 1 : 0.55)
             .onHover { hovered = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovered)
