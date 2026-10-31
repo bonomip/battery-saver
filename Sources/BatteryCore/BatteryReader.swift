@@ -10,12 +10,12 @@ public enum BatteryReader {
         return value
     }
     public static func read() throws -> BatterySample {
-        try readSnapshot(includeEstimates: false).sample
+        try readSnapshot(includeSystemStatus: false).sample
     }
     public static func readSnapshot() throws -> (sample: BatterySample, telemetry: BatteryTelemetry) {
-        try readSnapshot(includeEstimates: true)
+        try readSnapshot(includeSystemStatus: true)
     }
-    private static func readSnapshot(includeEstimates: Bool) throws -> (sample: BatterySample, telemetry: BatteryTelemetry) {
+    private static func readSnapshot(includeSystemStatus: Bool) throws -> (sample: BatterySample, telemetry: BatteryTelemetry) {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
         guard service != 0 else { throw SaverError("No internal MacBook battery found.") }
         defer { IOObjectRelease(service) }
@@ -28,27 +28,11 @@ public enum BatteryReader {
               (0...100).contains(capacity.intValue) else { throw SaverError("Required battery sensors are missing or unsupported.") }
         let design = number("DesignCapacity")?.doubleValue ?? 0
         let full = number("AppleRawMaxCapacity")?.doubleValue ?? 0
-        let sample = BatterySample(date: Date(), percent: capacity.intValue, temperature: try celsius(raw: rawTemp.doubleValue), externalPower: ac.boolValue, charging: charging.boolValue,
+        let system = powerSourceState(rawCharging: charging.boolValue, externalPower: ac.boolValue,
+                                      descriptions: includeSystemStatus ? powerSourceDescriptions() : [])
+        let sample = BatterySample(date: Date(), percent: capacity.intValue, temperature: try celsius(raw: rawTemp.doubleValue), externalPower: ac.boolValue, charging: system.charging,
                              currentMA: number("Amperage")?.intValue, voltageMV: number("Voltage")?.intValue,
                              cycles: number("CycleCount")?.intValue, healthPercent: design > 0 && full > 0 ? full / design * 100 : nil)
-        var minutesToFull: Int?
-        var minutesToEmpty: Int?
-        if includeEstimates, let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-           let sources = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] {
-            for source in sources {
-                guard let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
-                      description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
-                      (description[kIOPSIsChargingKey] as? NSNumber)?.boolValue == sample.charging,
-                      description[kIOPSPowerSourceStateKey] as? String == (sample.externalPower ? kIOPSACPowerValue : kIOPSBatteryPowerValue) else { continue }
-                minutesToFull = (description[kIOPSTimeToFullChargeKey] as? NSNumber)?.intValue
-                minutesToEmpty = (description[kIOPSTimeToEmptyKey] as? NSNumber)?.intValue
-                break
-            }
-        }
-        func validMinutes(_ value: Int?) -> Int? {
-            guard let value = value, value > 0, value != 65535 else { return nil }
-            return value
-        }
         let sensorDate = ["UserVisiblePathUpdated", "UpdateTime"].compactMap { key -> Date? in
             guard let value = number(key)?.doubleValue, value.isFinite, value > 0 else { return nil }
             return Date(timeIntervalSince1970: value)
@@ -57,7 +41,35 @@ public enum BatteryReader {
                                          remainingMAH: number("AppleRawCurrentCapacity")?.doubleValue,
                                          fullMAH: number("AppleRawMaxCapacity")?.doubleValue,
                                          percent: sample.percent, externalPower: sample.externalPower, charging: sample.charging,
-                                         minutesToFull: validMinutes(minutesToFull), minutesToEmpty: validMinutes(minutesToEmpty))
+                                         minutesToFull: system.minutesToFull, minutesToEmpty: system.minutesToEmpty)
         return (sample, telemetry)
+    }
+
+    struct PowerSourceState {
+        let charging: Bool
+        var minutesToFull: Int?
+        var minutesToEmpty: Int?
+    }
+    /// Match the same internal battery and AC state before merging macOS status.
+    /// The menu app follows the public charging flag, even when a raw flag lags it.
+    static func powerSourceState(rawCharging: Bool, externalPower: Bool, descriptions: [[String: Any]]) -> PowerSourceState {
+        for description in descriptions {
+            guard description[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
+                  description[kIOPSPowerSourceStateKey] as? String == (externalPower ? kIOPSACPowerValue : kIOPSBatteryPowerValue),
+                  let charging = description[kIOPSIsChargingKey] as? NSNumber,
+                  charging == NSNumber(value: 0) || charging == NSNumber(value: 1) else { continue }
+            func minutes(_ key: String) -> Int? {
+                guard let value = (description[key] as? NSNumber)?.intValue, value > 0, value != 65535 else { return nil }
+                return value
+            }
+            return PowerSourceState(charging: charging.boolValue, minutesToFull: minutes(kIOPSTimeToFullChargeKey),
+                                    minutesToEmpty: minutes(kIOPSTimeToEmptyKey))
+        }
+        return PowerSourceState(charging: rawCharging)
+    }
+    private static func powerSourceDescriptions() -> [[String: Any]] {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let sources = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else { return [] }
+        return sources.compactMap { IOPSGetPowerSourceDescription(info, $0)?.takeUnretainedValue() as? [String: Any] }
     }
 }

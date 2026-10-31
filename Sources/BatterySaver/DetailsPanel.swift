@@ -195,19 +195,20 @@ struct Panel: View {
 
     private var discharge: some View {
         let target = model.status?.dischargeTarget
+        let active = model.dischargeNeedsCancellation
         return Button {
-            if target != nil { model.cancelDischarge() } else { model.startDischarge() }
+            if active { model.cancelDischarge() } else { model.startDischarge() }
         } label: {
-            operationLabel(title: target != nil ? "Cancel discharge" : "Discharge to limit",
-                detail: target.map { "Running from battery to \($0)%." } ?? "Use battery power down to your saved limit.",
-                symbol: target != nil ? "stop.circle" : "battery.50", active: target != nil,
-                iconImage: target != nil ? nil : MenuBarBatteryIcon.image(
+            operationLabel(title: active ? "Cancel discharge" : "Discharge to limit",
+                detail: target.map { "Running from battery to \($0)%." } ?? (active ? "Adapter restoration needs attention." : "Use battery power down to your saved limit."),
+                symbol: active ? "stop.circle" : "battery.50", active: active,
+                iconImage: active ? nil : MenuBarBatteryIcon.image(
                     percent: model.sample?.percent, activity: .onBattery, tone: model.batteryTone,
                     appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!))
         }
         .buttonStyle(OperationTileStyle(tint: stateAccent))
         .help("Runs once to the saved limit. Cancels on sleep, heat, settings changes, after eight hours, or 30 minutes without progress. Keep the charger attached; adapter control can hide unplug detection.")
-        .disabled(!model.canControlHelper || (target == nil && !model.canStartDischarge))
+        .disabled(!model.canControlHelper || model.dischargePending || (!active && !model.canStartDischarge))
     }
 
     private var calibration: some View {

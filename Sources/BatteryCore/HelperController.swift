@@ -10,8 +10,6 @@ public final class HelperController {
     private let checkConflict: () throws -> Bool
     private let readCommand: () -> CalibrationCommand?
     private var inbox: CalibrationInbox
-    private var dischargeInbox: DischargeInbox
-    private let readDischarge: () -> DischargeCommand?
     private var dischargeCommandID: UUID?
     private var dischargeCommandError: String?
     private var settings = Settings(enabled: false)
@@ -22,15 +20,12 @@ public final class HelperController {
     public init(hardware: ChargingHardware, backend: String, existingCommand: CalibrationCommand?,
                 readSettings: @escaping () throws -> Settings, readBattery: @escaping () throws -> BatterySample,
                 checkConflict: @escaping () throws -> Bool, readCommand: @escaping () -> CalibrationCommand?,
-                adapterRecoveryRequired: Bool = false, persistAdapterRecovery: @escaping (Bool) throws -> Void = { _ in },
-                existingDischarge: DischargeCommand? = nil, readDischarge: @escaping () -> DischargeCommand? = { nil }) {
+                adapterRecoveryRequired: Bool = false, persistAdapterRecovery: @escaping (Bool) throws -> Void = { _ in }) {
         session = ProtectionSession(hardware: hardware, adapterRecoveryRequired: adapterRecoveryRequired,
                                     persistAdapterRecovery: persistAdapterRecovery); self.backend = backend
         self.readSettings = readSettings; self.readBattery = readBattery
         self.checkConflict = checkConflict; self.readCommand = readCommand
         inbox = CalibrationInbox(existing: existingCommand)
-        dischargeInbox = DischargeInbox(existing: existingDischarge)
-        self.readDischarge = readDischarge
     }
     private func status(_ state: String, error: String? = nil, sample: BatterySample? = nil, allowed: Bool? = nil) -> HelperStatus {
         var result = HelperStatus(state: state, error: error, settings: settings, sample: sample, backend: backend,
@@ -40,6 +35,7 @@ public final class HelperController {
         if dischargeCommandID != nil, let error = error { dischargeCommandError = error }
         result.dischargeCommandID = dischargeCommandID
         result.dischargeCommandError = dischargeCommandError
+        result.adapterRecoveryRequired = session.adapterMayBeDisabled
         return result
     }
     private func ownershipFailure() -> String? {
@@ -53,7 +49,7 @@ public final class HelperController {
         catch { detail += " Restoring our adapter input also failed: \(error.localizedDescription)" }
         return status("Protection unverified", error: detail)
     }
-    public func tick() -> HelperStatus {
+    public func tick(dischargeRequest: DischargeCommand? = nil) -> HelperStatus {
         guard running else { return status("Helper stopped") }
         guard !sleeping else { return status("Sleeping") }
         // This must precede settings/sensor reads: their failures must never
@@ -64,7 +60,7 @@ public final class HelperController {
             let newSettings = try readSettings(); try newSettings.validate(); settings = newSettings
             sample = try readBattery()
             let calibrationAction = readCommand().flatMap { inbox.consume($0) }
-            let dischargeCommand = readDischarge().flatMap { dischargeInbox.consume($0) }
+            let dischargeCommand = dischargeRequest
             if let command = dischargeCommand { dischargeCommandID = command.id; dischargeCommandError = nil }
             if calibrationAction == false || dischargeCommand?.target == nil && dischargeCommand != nil {
                 session.cancelDischarge(); session.cancelCalibration()

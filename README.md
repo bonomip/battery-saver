@@ -38,8 +38,10 @@ sudo /bin/zsh Scripts/helper.sh uninstall
 - **update:** preserve/migrate settings; roll back on failure; block incompatible downgrades.
 - **uninstall:** restore macOS control and remove the helper.
 
-Existing independent helpers need one authorized update. Afterward, app startup
-and Quit need no administrator prompt; settings changes still require authorization.
+Helper installation/updates require administrator approval. Startup, Quit, and
+Discharge on/off need no password; settings changes still require authorization.
+Discharge cancels on connection loss, a stalled app session, sleep, or errors.
+launchd restarts a failed helper to retry recovery; normal Quit still stops it.
 Downloaded apps include `Contents/Resources/helper.sh ACTION` (run with `sudo /bin/zsh`).
 
 ### release.sh
@@ -51,6 +53,16 @@ Downloaded apps include `Contents/Resources/helper.sh ACTION` (run with `sudo /b
 Builds Release, runs all Swift tests plus live read-only sensor and helper-operation
 checks, then packages `dist/Battery Saver.app`. Does not launch it. Run as a normal
 user on the target Mac. Signing is ad hoc, without notarization.
+
+## Uninstall
+
+Turn off **Start at login**, then use **Helper → gear → Restore and remove**
+(administrator approval required). Quit and delete `Battery Saver.app`.
+From a checkout, the equivalent helper removal is:
+
+```sh
+sudo /bin/zsh Scripts/helper.sh uninstall
+```
 
 ## Supporting files
 
@@ -64,7 +76,7 @@ user on the target Mac. Signing is ad hoc, without notarization.
 | `Resources/Helper/{install,update,uninstall}.sh` | Bundled operations; invoke through `helper.sh`. |
 | `Resources/Info.plist` | App metadata. |
 | `Resources/AppIcon.icns` | Generated app icon. |
-| `Resources/org.batterysaver.helper.plist` | On-demand launchd service; applied by install/update. |
+| `Resources/org.batterysaver.helper.plist` | On-demand service with failure recovery; applied by install/update. |
 
 ## Architecture
 

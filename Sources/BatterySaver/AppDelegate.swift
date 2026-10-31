@@ -19,10 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             model.error = "Wait for the current helper operation to finish before quitting."
             return .terminateCancel
         }
+        if !model.helperInstalled { model.helperSession.invalidate(); return .terminateNow }
         if model.helperRequiresLifecycleUpdate {
             let alert = NSAlert()
             alert.messageText = "Update the helper before quitting"
-            alert.informativeText = "This installed helper runs independently. Update it once so Quit can restore normal charging and stop it while preserving your settings."
+            alert.informativeText = "Update the installed helper so this app can manage its session safely. Your saved settings will be preserved."
             alert.addButton(withTitle: "Update helper")
             alert.addButton(withTitle: "Cancel")
             if alert.runModal() == .alertFirstButtonReturn { model.updateHelper() }

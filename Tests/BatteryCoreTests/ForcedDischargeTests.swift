@@ -15,6 +15,54 @@ private final class DischargeHardware: ChargingHardware {
 }
 
 final class ForcedDischargeTests: XCTestCase {
+    func testSessionCommandsStartAndCancelAndStayCancelled() {
+        let hardware = DischargeHardware()
+        var recovery = false
+        let controller = HelperController(hardware: hardware, backend: "test", existingCommand: nil,
+            readSettings: { Settings() }, readBattery: { self.sample() }, checkConflict: { false },
+            readCommand: { nil }, persistAdapterRecovery: { recovery = $0 })
+        let start = DischargeCommand(target: 80)
+        let running = controller.tick(dischargeRequest: start)
+        XCTAssertEqual(running.dischargeTarget, 80)
+        XCTAssertEqual(running.dischargeCommandID, start.id)
+        XCTAssertTrue(running.adapterRecoveryRequired)
+        XCTAssertTrue(recovery)
+        XCTAssertEqual(controller.tick().dischargeTarget, 80)
+        let cancel = DischargeCommand(target: nil)
+        let stopped = controller.tick(dischargeRequest: cancel)
+        XCTAssertNil(stopped.error)
+        XCTAssertNil(stopped.dischargeTarget)
+        XCTAssertEqual(stopped.dischargeCommandID, cancel.id)
+        XCTAssertFalse(stopped.adapterRecoveryRequired)
+        XCTAssertFalse(recovery)
+        XCTAssertNil(controller.tick().dischargeTarget)
+        XCTAssertTrue(hardware.operations.contains("adapter:true"))
+    }
+    func testFailedRestorationRemainsVisibleAndRestartRetriesWithoutReplayingDischarge() {
+        let hardware = DischargeHardware()
+        var recovery = false
+        func controller() -> HelperController {
+            HelperController(hardware: hardware, backend: "test", existingCommand: nil,
+                readSettings: { Settings() }, readBattery: { self.sample() }, checkConflict: { false },
+                readCommand: { nil }, adapterRecoveryRequired: recovery,
+                persistAdapterRecovery: { recovery = $0 })
+        }
+        let first = controller()
+        _ = first.tick(dischargeRequest: DischargeCommand(target: 80))
+        hardware.fail = "adapter:true"
+        let stopped = first.stop()
+        XCTAssertNotNil(stopped.error)
+        XCTAssertNil(stopped.dischargeTarget)
+        XCTAssertTrue(stopped.adapterRecoveryRequired)
+        XCTAssertTrue(recovery)
+        hardware.fail = nil
+        let recovered = controller().stop()
+        XCTAssertNil(recovered.error)
+        XCTAssertNil(recovered.dischargeTarget)
+        XCTAssertFalse(recovered.adapterRecoveryRequired)
+        XCTAssertFalse(recovery)
+        XCTAssertEqual(recovered.settings, Settings())
+    }
     private let now = Date()
     private func sample(_ percent: Int = 90, temperature: Double = 25, external: Bool = true, date: Date = Date()) -> BatterySample {
         BatterySample(date: date, percent: percent, temperature: temperature, externalPower: external,
@@ -125,24 +173,12 @@ final class ForcedDischargeTests: XCTestCase {
             XCTAssertEqual(hardware.operations.first, "adapter:true")
         }
     }
-    func testInboxExpiryReplayRestartAndCancel() {
-        let start = DischargeCommand(date: now, target: 80)
-        var inbox = DischargeInbox(existing: start)
-        XCTAssertNil(inbox.consume(start, now: now))
-        let fresh = DischargeCommand(date: now, target: 80)
-        XCTAssertEqual(inbox.consume(fresh, now: now)?.id, fresh.id)
-        XCTAssertNil(inbox.consume(fresh, now: now))
-        XCTAssertNil(inbox.consume(DischargeCommand(date: now.addingTimeInterval(-31), target: 80), now: now))
-        XCTAssertNil(inbox.consume(DischargeCommand(date: now.addingTimeInterval(1), target: 80), now: now))
-        XCTAssertNotNil(inbox.consume(DischargeCommand(date: now.addingTimeInterval(-100), target: nil), now: now))
-    }
     func testControllerStopClearsOperation() throws {
         let hardware = DischargeHardware()
         let command = DischargeCommand(target: 80)
         let controller = HelperController(hardware: hardware, backend: "test", existingCommand: nil,
-            readSettings: { Settings() }, readBattery: { self.sample() }, checkConflict: { false }, readCommand: { nil },
-            readDischarge: { command })
-        XCTAssertEqual(controller.tick().dischargeTarget, 80)
+            readSettings: { Settings() }, readBattery: { self.sample() }, checkConflict: { false }, readCommand: { nil })
+        XCTAssertEqual(controller.tick(dischargeRequest: command).dischargeTarget, 80)
         let stopped = controller.stop()
         XCTAssertNil(stopped.dischargeTarget)
         XCTAssertFalse(stopped.running)
@@ -153,8 +189,8 @@ final class ForcedDischargeTests: XCTestCase {
             let hardware = DischargeHardware()
             let controller = HelperController(hardware: hardware, backend: "test", existingCommand: nil,
                 readSettings: { Settings() }, readBattery: { self.sample() }, checkConflict: { false },
-                readCommand: { CalibrationCommand(start: !cancel) }, readDischarge: { DischargeCommand(target: 80) })
-            let status = controller.tick()
+                readCommand: { CalibrationCommand(start: !cancel) })
+            let status = controller.tick(dischargeRequest: DischargeCommand(target: 80))
             XCTAssertNil(status.dischargeTarget)
             XCTAssertFalse(status.calibrationActive)
             XCTAssertEqual(status.error == nil, cancel)
@@ -170,8 +206,8 @@ final class ForcedDischargeTests: XCTestCase {
             let controller = HelperController(hardware: hardware, backend: "test", existingCommand: nil,
                 readSettings: { if failing && !conflict { throw SaverError("settings unavailable") }; return Settings() },
                 readBattery: { self.sample() }, checkConflict: { failing && conflict }, readCommand: { nil },
-                persistAdapterRecovery: { records.append($0) }, readDischarge: { command })
-            XCTAssertEqual(controller.tick().dischargeTarget, 80)
+                persistAdapterRecovery: { records.append($0) })
+            XCTAssertEqual(controller.tick(dischargeRequest: command).dischargeTarget, 80)
             hardware.operations = []; failing = true
             let status = controller.tick()
             XCTAssertNotNil(status.error)
@@ -181,14 +217,13 @@ final class ForcedDischargeTests: XCTestCase {
             if conflict { XCTAssertEqual(hardware.operations, ["adapter:true"]) }
         }
     }
-    func testRestartRecoversAdapterWithoutReplayingRequest() {
+    func testRestartRecoversAdapterWithoutResumingDischarge() {
         let hardware = DischargeHardware()
-        let command = DischargeCommand(target: 80)
         var records: [Bool] = []
         let controller = HelperController(hardware: hardware, backend: "test", existingCommand: nil,
             readSettings: { Settings() }, readBattery: { self.sample(85, external: false) },
             checkConflict: { false }, readCommand: { nil }, adapterRecoveryRequired: true,
-            persistAdapterRecovery: { records.append($0) }, existingDischarge: command, readDischarge: { command })
+            persistAdapterRecovery: { records.append($0) })
         let status = controller.tick()
         XCTAssertNil(status.dischargeTarget)
         XCTAssertEqual(hardware.operations, ["adapter:true", "charge:false"])
@@ -211,16 +246,17 @@ final class ForcedDischargeTests: XCTestCase {
     func testStatusMigrationDefaultsAndRoundtrip() throws {
         var status = HelperStatus(state: "test", error: nil, settings: Settings(), sample: nil,
                                   backend: "test", chargingAllowed: false)
-        status.dischargeSupported = true; status.dischargeTarget = 80
+        status.dischargeSupported = true; status.dischargeTarget = 80; status.adapterRecoveryRequired = true
         status.dischargeCommandID = UUID()
         let encoded = try JSONEncoder().encode(status)
         XCTAssertEqual(try JSONDecoder().decode(HelperStatus.self, from: encoded), status)
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        for key in ["dischargeSupported", "dischargeTarget", "dischargeCommandID"] { json.removeValue(forKey: key) }
+        for key in ["dischargeSupported", "dischargeTarget", "dischargeCommandID", "adapterRecoveryRequired"] { json.removeValue(forKey: key) }
         let old = try JSONDecoder().decode(HelperStatus.self, from: JSONSerialization.data(withJSONObject: json))
         XCTAssertFalse(old.dischargeSupported)
         XCTAssertNil(old.dischargeTarget)
         XCTAssertNil(old.dischargeCommandID)
+        XCTAssertFalse(old.adapterRecoveryRequired)
     }
     func testDischargeReleasesChargingSleepHold() throws {
         let hardware = ChargingSleepGuardTests.Hardware()
@@ -239,8 +275,8 @@ final class ForcedDischargeTests: XCTestCase {
         let command = DischargeCommand(target: 81)
         let controller = HelperController(hardware: hardware, backend: "test", existingCommand: nil,
             readSettings: { Settings() }, readBattery: { self.sample() }, checkConflict: { false },
-            readCommand: { nil }, readDischarge: { command })
-        let rejected = controller.tick()
+            readCommand: { nil })
+        let rejected = controller.tick(dischargeRequest: command)
         XCTAssertNotNil(rejected.error)
         XCTAssertEqual(rejected.dischargeCommandID, command.id)
         let later = controller.tick()

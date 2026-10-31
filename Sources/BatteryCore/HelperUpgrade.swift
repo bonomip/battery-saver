@@ -5,7 +5,7 @@ public struct HelperVersion: Codable, Equatable {
     public let revision: Int
     public let protocolVersion: Int
     public let settingsSchema: Int
-    public static let current = HelperVersion(revision: 5, protocolVersion: 4, settingsSchema: 1)
+    public static let current = HelperVersion(revision: 7, protocolVersion: 5, settingsSchema: 1)
     public init(revision: Int, protocolVersion: Int, settingsSchema: Int) {
         self.revision = revision; self.protocolVersion = protocolVersion; self.settingsSchema = settingsSchema
     }

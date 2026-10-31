@@ -20,17 +20,19 @@ final class BatteryModel: ObservableObject {
     var helperCompatible: Bool { helperUpgrade == .ready }
     var canControlHelper: Bool { !saving && helperCompatible }
     var calibrating: Bool { status?.isCurrent == true && status?.calibrationActive == true }
+    var dischargeNeedsCancellation: Bool {
+        status?.dischargeTarget != nil || (status?.adapterRecoveryRequired == true && !calibrating)
+    }
     var canStartCalibration: Bool {
-        canControlHelper && protectionVerified && status?.dischargeTarget == nil && !hasDraft && !awaitingSettings
+        canControlHelper && protectionVerified && !dischargeNeedsCancellation && !dischargePending && !hasDraft && !awaitingSettings
     }
     var canStartDischarge: Bool {
-        canControlHelper && protectionVerified && !dischargePending && !hasDraft && !awaitingSettings &&
+        canControlHelper && protectionVerified && !dischargeNeedsCancellation && !dischargePending && !hasDraft && !awaitingSettings &&
             !calibrating && status?.dischargeSupported == true && sample?.externalPower == true &&
             (sample?.percent ?? 0) > (status?.settings.upper ?? 100)
     }
     @Published var saving = false
     @Published var dischargePending = false
-    private var dischargeRequest: (UUID, Date)?
     @Published var inputErrors: Set<String> = []
     @Published private(set) var startAtLogin = false
     @Published var draftResetID = 0
@@ -82,15 +84,6 @@ final class BatteryModel: ObservableObject {
             acceptReading(sample: reading.sample, telemetry: reading.telemetry)
             readError = nil
         } catch { sample = nil; insight = nil; insightDate = nil; readError = error.localizedDescription }
-        if let (id, date) = dischargeRequest {
-            if status?.dischargeCommandID == id && status?.isRecentRuntime == true {
-                dischargeRequest = nil; dischargePending = false
-                if let failure = status?.dischargeCommandError { error = failure }
-            } else if Date().timeIntervalSince(date) > 30 {
-                dischargeRequest = nil; dischargePending = false
-                error = "Discharge command was not acknowledged. Check the helper before retrying."
-            }
-        }
         var draft = settingsDraft
         if let message = draft.refresh(status: status) { error = message }
         if !helperInstalled { draft.helperUnavailable() }
@@ -121,12 +114,19 @@ final class BatteryModel: ObservableObject {
     var palette: AppPalette { AppPalette(tone: batteryTone) }
     func startDischarge() {
         guard canStartDischarge, let status = status else { return }
-        let id = UUID()
-        authorize(["--discharge", "\(status.settings.upper)", id.uuidString])
+        setDischargeTarget(status.settings.upper)
     }
     func cancelDischarge() {
-        guard !saving else { return }
-        authorize(["--cancel-discharge", UUID().uuidString])
+        setDischargeTarget(nil)
+    }
+    private func setDischargeTarget(_ target: Int?) {
+        guard canControlHelper, !dischargePending else { return }
+        dischargePending = true; error = nil
+        helperSession.discharge(to: target, identifier: UUID()) { message in
+            self.dischargePending = false
+            self.error = message
+            self.refresh(forcePublish: true)
+        }
     }
     func startCalibration() {
         guard canStartCalibration else { return }
@@ -214,11 +214,7 @@ final class BatteryModel: ObservableObject {
         saving = true; error = nil
         AuthorizedCommand.run(executable: executable, arguments: arguments) { result in
             self.saving = false; self.error = result.error
-            if arguments.first == "--discharge" || arguments.first == "--cancel-discharge" {
-                if result.succeeded, let id = UUID(uuidString: arguments.last ?? "") {
-                    self.dischargeRequest = (id, Date()); self.dischargePending = true
-                }
-            }
+            if result.succeeded && arguments.last == "uninstall" { self.helperSession.invalidate() }
             if configuration { self.settingsDraft.authorizationFinished(succeeded: result.succeeded, cancelled: result.cancelled) }
             if helperUpdate {
                 _ = self.updateAuthorization.finish(succeeded: result.succeeded, cancelled: result.cancelled)

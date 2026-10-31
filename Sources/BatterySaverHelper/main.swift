@@ -33,11 +33,9 @@ let requestPath = Locations.directory + "/calibration-request.json"
 let recoveryPath = Locations.directory + "/adapter-recovery.json"
 let sleepRecoveryPath = Locations.directory + "/sleep-recovery.json"
 
-let dischargeRequestPath = Locations.directory + "/discharge-request.json"
-
-func readRequest<T: Decodable>(at path: String) -> T? {
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
-    return try? JSONDecoder().decode(T.self, from: data)
+func readCalibrationCommand() -> CalibrationCommand? {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: requestPath)) else { return nil }
+    return try? JSONDecoder().decode(CalibrationCommand.self, from: data)
 }
 
 final class Daemon {
@@ -45,6 +43,13 @@ final class Daemon {
     let sleepGuard: ChargingSleepGuard
     var signals: [DispatchSourceSignal] = []
     var timer: Timer?
+    static func recoverInterruptedOperations() throws {
+        let adapter = try AdapterRecoveryStore(path: recoveryPath).read()
+        let sleep = try AdapterRecoveryStore(path: sleepRecoveryPath).read()
+        guard adapter || sleep else { return }
+        let status = try Daemon().stop()
+        if let error = status.error { throw SaverError(error) }
+    }
     init() throws {
         let sleepStore = AdapterRecoveryStore(path: sleepRecoveryPath)
         sleepGuard = ChargingSleepGuard(hardware: PMSetSleepSetting(), recoveryRequired: try sleepStore.read(),
@@ -54,12 +59,11 @@ final class Daemon {
         let needsRecovery = try recoveryStore.read()
         let gate = try ChargeGate()
         controller = HelperController(hardware: gate, backend: gate.backend,
-                                      existingCommand: readRequest(at: requestPath),
+                                      existingCommand: readCalibrationCommand(),
                                       readSettings: Locations.readSettings, readBattery: BatteryReader.read,
-                                      checkConflict: conflicts, readCommand: { readRequest(at: requestPath) },
+                                      checkConflict: conflicts, readCommand: readCalibrationCommand,
                                       adapterRecoveryRequired: needsRecovery,
-                                      persistAdapterRecovery: recoveryStore.write,
-                                      existingDischarge: readRequest(at: dischargeRequestPath), readDischarge: { readRequest(at: dischargeRequestPath) })
+                                      persistAdapterRecovery: recoveryStore.write)
     }
     @discardableResult func publish(_ status: HelperStatus) -> HelperStatus {
         var output = status
@@ -77,10 +81,35 @@ final class Daemon {
             output.sleepMessage = "Keeping awake until \(status.settings.upper)%"
         }
         do { try writeJSON(output, path: Locations.status) }
-        catch { fputs("Status write failed: \(error.localizedDescription)\n", stderr) }
+        catch {
+            let message = "Status write failed: \(error.localizedDescription)"
+            output.error = [output.error, message].compactMap { $0 }.joined(separator: "; ")
+            fputs("\(message)\n", stderr)
+        }
         return output
     }
-    func power(_ sleeping: Bool) { publish(sleeping ? controller.sleep() : controller.wake()) }
+    @discardableResult private func publishSafely(_ status: HelperStatus) -> HelperStatus {
+        let output = publish(status)
+        guard output.error != nil, output.adapterRecoveryRequired else { return output }
+        // A failed status/sleep operation must not leave an adapter cut running.
+        // Try restoration now; unsuccessful exits let launchd retry durable recovery.
+        var restored = stop()
+        restored.error = [output.error, restored.error].compactMap { $0 }.joined(separator: "; ")
+        _ = publish(restored)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(1) }
+        return restored
+    }
+    @discardableResult func tick(dischargeRequest: DischargeCommand? = nil) -> HelperStatus {
+        publishSafely(controller.tick(dischargeRequest: dischargeRequest))
+    }
+    func discharge(to target: Int?, id: UUID) -> String? {
+        let status = tick(dischargeRequest: DischargeCommand(id: id, target: target))
+        if let error = status.error ?? status.dischargeCommandError { return error }
+        guard status.dischargeCommandID == id else { return "Discharge command was not acknowledged." }
+        if target == nil && status.adapterRecoveryRequired { return "Adapter restoration is still pending." }
+        return nil
+    }
+    func power(_ sleeping: Bool) { publishSafely(sleeping ? controller.sleep() : controller.wake()) }
     func stop() -> HelperStatus {
         timer?.invalidate()
         let stopped = publish(controller.stop())
@@ -104,8 +133,8 @@ final class Daemon {
             }
             source.resume(); signals.append(source)
         }
-        publish(controller.tick())
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [self] _ in publish(controller.tick()) }
+        tick()
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [self] _ in tick() }
     }
 }
 
@@ -152,7 +181,15 @@ do {
         // A second launch must never overwrite the live daemon's status.
         let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
         defer { withExtendedLifetime(lock) {} }
-        AppSessionService().run()
+        do { try AppSessionService().run() }
+        catch {
+            var status = HelperStatus(state: "Helper recovery failed", error: error.localizedDescription,
+                                      settings: (try? Locations.readSettings()) ?? Settings(enabled: false),
+                                      sample: nil, backend: "Recovery", chargingAllowed: nil, running: false)
+            status.adapterRecoveryRequired = (try? AdapterRecoveryStore(path: recoveryPath).read()) ?? true
+            try? writeJSON(status, path: Locations.status)
+            throw error
+        }
     case "--configure":
         try checkRootDirectory()
         guard (arguments.count == 6 || arguments.count == 7), let enabled = Int(arguments[1]), [0, 1].contains(enabled),
@@ -169,19 +206,6 @@ do {
         if settings.enabled { if try conflicts() { throw SaverError("AlDente or another controller is running. Stop it before activating Battery Saver.") } }
         try writeJSON(settings, path: Locations.settings)
         print("Settings saved. The helper applies them within five seconds.")
-    case "--discharge", "--cancel-discharge":
-        try checkRootDirectory()
-        let target: Int?
-        if arguments[0] == "--discharge" {
-            guard arguments.count == 3, let value = Int(arguments[1]), (21...100).contains(value),
-                  try Locations.readSettings().enabled, try !conflicts() else { throw SaverError("Invalid discharge request.") }
-            target = value
-        } else {
-            guard arguments.count == 2 else { throw SaverError("Invalid cancellation request.") }
-            target = nil
-        }
-        guard let id = UUID(uuidString: arguments.last ?? "") else { throw SaverError("Missing discharge request identifier.") }
-        try writeJSON(DischargeCommand(id: id, target: target), path: dischargeRequestPath)
     case "--calibrate", "--cancel-calibration":
         try checkRootDirectory()
         if arguments[0] == "--calibrate" {

@@ -106,6 +106,7 @@ public struct HelperStatus: Codable, Equatable {
     public var dischargeTarget: Int?
     public var dischargeCommandID: UUID?
     public var dischargeCommandError: String?
+    public var adapterRecoveryRequired = false
     public var sleepMessage: String?
     public var isRecentRuntime: Bool { running && (-5...30).contains(Date().timeIntervalSince(date)) }
     public var isCurrent: Bool { isRecentRuntime && error == nil }
@@ -121,6 +122,7 @@ public struct HelperStatus: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case helperVersion, date, state, error, settings, sample, backend, chargingAllowed, calibrationActive, running
         case sleepControlAvailable, sleepHeld, sleepMessage, dischargeSupported, dischargeTarget, dischargeCommandID, dischargeCommandError
+        case adapterRecoveryRequired
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -140,6 +142,7 @@ public struct HelperStatus: Codable, Equatable {
         dischargeTarget = try values.decodeIfPresent(Int.self, forKey: .dischargeTarget)
         dischargeCommandID = try values.decodeIfPresent(UUID.self, forKey: .dischargeCommandID)
         dischargeCommandError = try values.decodeIfPresent(String.self, forKey: .dischargeCommandError)
+        adapterRecoveryRequired = try values.decodeIfPresent(Bool.self, forKey: .adapterRecoveryRequired) ?? false
         sleepMessage = try values.decodeIfPresent(String.self, forKey: .sleepMessage)
     }
 }

@@ -8,6 +8,7 @@ final class HelperAppSession {
     private var wanted = false
     private var generation = UUID()
     private var completion: ((String?) -> Void)?
+    private var heartbeatTimer: Timer?
     private(set) var error: String?
     var onChange: (() -> Void)?
 
@@ -38,6 +39,7 @@ final class HelperAppSession {
                 }
                 self.connected = true
                 self.error = nil
+                self.startHeartbeat()
                 let callback = self.completion; self.completion = nil
                 callback?(nil); self.onChange?()
             }
@@ -51,6 +53,7 @@ final class HelperAppSession {
         guard generation == id else { return }
         generation = UUID()
         self.error = error
+        heartbeatTimer?.invalidate(); heartbeatTimer = nil
         let old = connection; connection = nil; connected = false
         old?.invalidate()
         let callback = completion; completion = nil
@@ -64,6 +67,7 @@ final class HelperAppSession {
     }
     func stop(completion: @escaping (String?) -> Void) {
         wanted = false
+        heartbeatTimer?.invalidate(); heartbeatTimer = nil
         generation = UUID()
         guard let connection = connection else { completion(error); return }
         self.connection = nil; connected = false
@@ -80,5 +84,45 @@ final class HelperAppSession {
         proxy?.end { error in DispatchQueue.main.async { finish(error) } }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { finish("Helper shutdown was not confirmed.") }
     }
-    deinit { connection?.invalidate() }
+    private func startHeartbeat() {
+        heartbeatTimer?.invalidate()
+        let timer = Timer(timeInterval: HelperSessionLease.renewalInterval, repeats: true) { [weak self] _ in
+            guard let self = self, self.connected, let connection = self.connection else { return }
+            let id = self.generation
+            let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                DispatchQueue.main.async { self.failed(id, error.localizedDescription) }
+            } as? HelperSessionProtocol
+            proxy?.heartbeat()
+        }
+        heartbeatTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    func discharge(to target: Int?, identifier: UUID, completion: @escaping (String?) -> Void) {
+        guard connected, let connection = connection else { completion("The helper is reconnecting. Try again shortly."); return }
+        let id = generation
+        var finished = false
+        let finish: (String?, Bool) -> Void = { [weak self] error, transportFailed in
+            guard !finished else { return }; finished = true
+            if transportFailed, let error = error { self?.failed(id, error) }
+            completion(error)
+        }
+        let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+            DispatchQueue.main.async { finish(error.localizedDescription, true) }
+        } as? HelperSessionProtocol
+        proxy?.discharge(to: target.map { NSNumber(value: $0) }, identifier: identifier.uuidString) { [weak self] error in
+            DispatchQueue.main.async {
+                finish(self?.generation == id ? error : "The helper session changed; discharge was cancelled.", false)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { finish("Discharge command timed out; stopping the helper session.", true) }
+    }
+    /// Used after uninstall; there is no installed service left to acknowledge a stop.
+    func invalidate() {
+        wanted = false; connected = false; generation = UUID(); error = nil
+        completion = nil
+        heartbeatTimer?.invalidate(); heartbeatTimer = nil
+        let old = connection; connection = nil
+        old?.invalidate()
+    }
+    deinit { heartbeatTimer?.invalidate(); connection?.invalidate() }
 }

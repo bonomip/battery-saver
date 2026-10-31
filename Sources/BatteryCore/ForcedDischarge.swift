@@ -41,18 +41,9 @@ public struct ForcedDischarge {
     }
 }
 
-public struct DischargeCommand: Codable {
+/// Ephemeral session command; only recovery ownership is persisted.
+public struct DischargeCommand {
     public let id: UUID
-    public let date: Date
     public let target: Int?
-    public init(id: UUID = UUID(), date: Date = Date(), target: Int?) { self.id = id; self.date = date; self.target = target }
-}
-public struct DischargeInbox {
-    private var seen: UUID?
-    public init(existing: DischargeCommand? = nil) { seen = existing?.id }
-    public mutating func consume(_ command: DischargeCommand, now: Date = Date()) -> DischargeCommand? {
-        guard command.id != seen else { return nil }; seen = command.id
-        guard command.target == nil || (0...30).contains(now.timeIntervalSince(command.date)) else { return nil }
-        return command
-    }
+    public init(id: UUID = UUID(), target: Int?) { self.id = id; self.target = target }
 }

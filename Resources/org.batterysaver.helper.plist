@@ -9,8 +9,8 @@
 <key>MachServices</key><dict>
 <key>org.batterysaver.helper.session</key><true/>
 </dict>
-<key>RunAtLoad</key><false/>
-<key>KeepAlive</key><false/>
-<key>ThrottleInterval</key><integer>1</integer>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>ThrottleInterval</key><integer>5</integer>
 <key>ProcessType</key><string>Background</string>
 </dict></plist>

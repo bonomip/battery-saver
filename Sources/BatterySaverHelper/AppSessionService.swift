@@ -9,10 +9,16 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
     private var daemon: Daemon?
     private var shuttingDown = false
     private var idleGeneration = UUID()
+    private var leaseTimer: Timer?
+    private var dischargeOwner: UUID?
 
-    func run() {
+    func run() throws {
+        try Daemon.recoverInterruptedOperations()
         listener.delegate = self
         listener.resume()
+        leaseTimer = Timer.scheduledTimer(withTimeInterval: HelperSessionLease.renewalInterval, repeats: true) { [weak self] _ in
+            self?.expireLeases()
+        }
         scheduleIdleExit()
         RunLoop.main.run()
     }
@@ -21,6 +27,7 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
         guard stat("/dev/console", &console) == 0,
               connection.effectiveUserIdentifier == 0 || connection.effectiveUserIdentifier == console.st_uid else { return false }
         let endpoint = SessionEndpoint(service: self)
+        endpoint.connection = connection
         connection.exportedInterface = HelperSessionService.interface()
         connection.exportedObject = endpoint
         connection.invalidationHandler = { [weak self] in
@@ -42,6 +49,7 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
                 try instance.start()
             }
             clients[client.id] = client
+            client.lease.renew()
             idleGeneration = UUID()
             reply(try JSONEncoder().encode(HelperVersion.current), nil)
         } catch {
@@ -50,11 +58,23 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
         }
     }
     func end(_ id: UUID, reply: @escaping (String?) -> Void) {
-        clients.removeValue(forKey: id)
-        if clients.isEmpty {
-            let error = stop()
-            reply(error)
-        } else { reply(nil) }
+        reply(release(id))
+    }
+    fileprivate func heartbeat(_ client: SessionEndpoint) {
+        guard !client.invalidated, clients[client.id] === client else { return }
+        client.lease.renew()
+    }
+    fileprivate func discharge(_ client: SessionEndpoint, target: NSNumber?, identifier: String, reply: @escaping (String?) -> Void) {
+        guard !shuttingDown, !client.invalidated, clients[client.id] === client, let daemon = daemon,
+              let id = UUID(uuidString: identifier) else { reply("An active app session is required."); return }
+        if let target = target {
+            guard target.doubleValue.isFinite, (21...100).contains(target.intValue),
+                  target == NSNumber(value: target.intValue) else { reply("Invalid discharge target."); return }
+        }
+        client.lease.renew()
+        let error = daemon.discharge(to: target?.intValue, id: id)
+        if error == nil { dischargeOwner = target == nil ? nil : client.id }
+        reply(error)
     }
     func check(reply: @escaping (Data?, String?) -> Void) {
         guard !shuttingDown else { reply(nil, "Helper is stopping."); return }
@@ -68,12 +88,26 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
         } catch { reply(nil, error.localizedDescription) }
     }
     private func disconnected(_ id: UUID) {
-        guard clients.removeValue(forKey: id) != nil else { return }
-        if clients.isEmpty { stop() }
+        _ = release(id)
+    }
+    private func release(_ id: UUID) -> String? {
+        guard clients.removeValue(forKey: id) != nil else { return nil }
+        if clients.isEmpty { return stop() }
+        guard dischargeOwner == id else { return nil }
+        dischargeOwner = nil
+        return daemon?.discharge(to: nil, id: UUID())
+    }
+    private func expireLeases() {
+        for client in Array(clients.values) where client.lease.expired() {
+            client.invalidated = true
+            client.connection?.invalidate()
+            _ = release(client.id)
+        }
     }
     @discardableResult private func stop() -> String? {
         guard !shuttingDown else { return nil }
         shuttingDown = true
+        leaseTimer?.invalidate()
         let failure = daemon?.stop().error
         // Give XPC time to deliver the restoration acknowledgement before process exit.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(failure == nil ? 0 : 1) }
@@ -91,6 +125,8 @@ final class AppSessionService: NSObject, NSXPCListenerDelegate {
 fileprivate final class SessionEndpoint: NSObject, HelperSessionProtocol {
     let id = UUID()
     var invalidated = false
+    var lease = HelperSessionLease()
+    weak var connection: NSXPCConnection?
     private weak var service: AppSessionService?
     init(service: AppSessionService) { self.service = service }
     func check(withReply reply: @escaping (Data?, String?) -> Void) {
@@ -101,6 +137,12 @@ fileprivate final class SessionEndpoint: NSObject, HelperSessionProtocol {
     }
     func end(withReply reply: @escaping (String?) -> Void) {
         DispatchQueue.main.async { [self] in service?.end(id, reply: reply) }
+    }
+    func heartbeat() {
+        DispatchQueue.main.async { [self] in service?.heartbeat(self) }
+    }
+    func discharge(to target: NSNumber?, identifier: String, withReply reply: @escaping (String?) -> Void) {
+        DispatchQueue.main.async { [self] in service?.discharge(self, target: target, identifier: identifier, reply: reply) }
     }
 }
 

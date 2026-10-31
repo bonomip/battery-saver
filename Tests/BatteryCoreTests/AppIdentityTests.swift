@@ -13,8 +13,8 @@ final class AppIdentityTests: XCTestCase {
         let service = try plist(AppIdentity.service + ".plist")
         XCTAssertEqual(service["Label"] as? String, AppIdentity.service)
         XCTAssertEqual(service["MachServices"] as? [String: Bool], [HelperSessionService.name: true])
-        XCTAssertEqual(service["RunAtLoad"] as? Bool, false)
-        XCTAssertEqual(service["KeepAlive"] as? Bool, false)
+        XCTAssertEqual(service["RunAtLoad"] as? Bool, true)
+        XCTAssertEqual(service["KeepAlive"] as? [String: Bool], ["SuccessfulExit": false])
         XCTAssertEqual(LoginStartup.label, AppIdentity.login)
     }
 }
