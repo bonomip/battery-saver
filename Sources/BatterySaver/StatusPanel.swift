@@ -1,6 +1,6 @@
 import AppKit
 
-/// A borderless surface lets QuickCard own its rounded background and single border.
+/// Use the native window frame, matching Settings without showing title-bar controls.
 final class StatusPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -15,11 +15,18 @@ func statusPanelFrame(size: NSSize, anchor: NSRect, visibleFrame: NSRect) -> NSR
 }
 
 func makeStatusPanel(content: NSView, anchor: NSRect, visibleFrame: NSRect) -> StatusPanel {
-    let panel = StatusPanel(contentRect: statusPanelFrame(size: content.frame.size, anchor: anchor, visibleFrame: visibleFrame),
-                            styleMask: [.borderless], backing: .buffered, defer: false)
+    let frame = statusPanelFrame(size: content.frame.size, anchor: anchor, visibleFrame: visibleFrame)
+    let panel = StatusPanel(contentRect: frame,
+                            styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
     panel.isReleasedWhenClosed = false
-    panel.backgroundColor = .clear
-    panel.isOpaque = false
+    panel.titleVisibility = .hidden
+    panel.titlebarAppearsTransparent = true
+    panel.isMovable = false
+    for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+        panel.standardWindowButton(button)?.isHidden = true
+    }
+    panel.backgroundColor = AppPalette.windowBackground
+    panel.isOpaque = true
     panel.hasShadow = true
     panel.hidesOnDeactivate = false
     panel.isFloatingPanel = true
@@ -27,6 +34,11 @@ func makeStatusPanel(content: NSView, anchor: NSRect, visibleFrame: NSRect) -> S
     panel.collectionBehavior = [.transient, .fullScreenAuxiliary]
     panel.animationBehavior = .none
     panel.contentView = content
+    // Installing a hosting view can resize a titled window to its intrinsic content size.
+    // Apply the full popup frame afterward and fill it, including the hidden title bar.
+    panel.setFrame(frame, display: false)
+    content.autoresizingMask = [.width, .height]
+    content.frame = NSRect(origin: .zero, size: frame.size)
     let scale = panel.backingScaleFactor
     panel.setFrameOrigin(NSPoint(x: (panel.frame.minX * scale).rounded() / scale,
                                  y: (panel.frame.minY * scale).rounded() / scale))

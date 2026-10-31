@@ -83,6 +83,11 @@ signing or notarization.
 
 ## Architecture
 
+`BatteryModel.batteryTone` selects the state; `AppPalette.swift` maps it to one
+shared accent for the menu bar, status window, buttons, sliders, and toggles.
+Edit the palette to change colors app-wide. Warning/error colors remain semantic;
+the palette also owns theme surfaces and foreground contrast.
+
 ```mermaid
 flowchart TD
     App[BatterySaver: menu bar UI] --> Core[BatteryCore: policy and shared models]

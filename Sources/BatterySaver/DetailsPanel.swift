@@ -9,7 +9,7 @@ struct Panel: View {
     @State private var showUninstall = false
     @State private var showCapacity = false
     @State private var showLimitsInfo = false
-    private var green: Color { Color(MenuBarBatteryIcon.color(model.batteryTone)) }
+    private var stateAccent: Color { model.palette.accent }
     private var calibrating: Bool { model.status?.isCurrent == true && model.status?.calibrationActive == true }
 
     var body: some View {
@@ -17,7 +17,7 @@ struct Panel: View {
             header
             if let error = model.warning {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(AppPalette.warning)
                     Text(error).font(.caption).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     if model.error != nil { Button { model.error = nil } label: {
@@ -25,7 +25,7 @@ struct Panel: View {
                     }.buttonStyle(.plain).accessibilityLabel("Dismiss error") }
                 }
                 .padding(12)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.12)))
+                .background(RoundedRectangle(cornerRadius: 12).fill(AppPalette.warning.opacity(0.12)))
             }
             overview
             HStack(alignment: .top, spacing: 12) {
@@ -45,8 +45,8 @@ struct Panel: View {
         }
         .padding(18)
         .frame(width: 680)
-        .background(Color(NSColor.windowBackgroundColor))
-        .accentColor(green)
+        .background(Color(AppPalette.windowBackground))
+        .accentColor(stateAccent)
         .controlSize(.regular)
         .buttonStyle(SecondaryActionStyle())
         .alert("Start battery calibration?", isPresented: $showCalibration) {
@@ -72,13 +72,18 @@ struct Panel: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Settings & details").font(.system(size: 22, weight: .semibold))
-                    .modifier(SettingsRiddleEasterEgg(tint: green))
+                    .modifier(SettingsRiddleEasterEgg(tint: stateAccent))
                 Text("Charge limits, health and calibration.").font(.callout).foregroundColor(.secondary)
             }
             Spacer()
-            Button { NSApp.terminate(nil) } label: { Image(systemName: "power").frame(width: 28, height: 28) }
+            Button { NSApp.terminate(nil) } label: {
+                Image(systemName: "power.circle")
+                    .font(.system(size: 19, weight: .medium))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Circle())
+            }
                 .buttonStyle(.plain)
-                .foregroundColor(.secondary)
+                .foregroundColor(.primary)
                 .accessibilityLabel("Quit Battery Saver")
                 .help("Quit Battery Saver. The background helper keeps protecting your battery.")
         }
@@ -90,9 +95,9 @@ struct Panel: View {
                 BatteryRing(model: model, size: 68)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(model.activity.title).font(.callout).fontWeight(.medium).lineLimit(2)
-                    if let target = model.status?.dischargeTarget { Text("Discharging to \(target)%").font(.caption).foregroundColor(.orange) }
+                    if let target = model.status?.dischargeTarget { Text("Discharging to \(target)%").font(.caption).foregroundColor(stateAccent) }
                     if let status = model.status, status.isCurrent, status.state.hasPrefix("Cooling") {
-                        Text("Charging paused while the battery cools.").font(.caption).foregroundColor(.orange)
+                        Text("Charging paused while the battery cools.").font(.caption).foregroundColor(AppPalette.warning)
                     }
                     if let estimate = model.estimate {
                         Label(estimate, systemImage: "clock").font(.caption).foregroundColor(.secondary)
@@ -131,14 +136,14 @@ struct Panel: View {
                         }
                     Spacer()
                     Toggle("Charge limits", isOn: model.draft(\.enabled))
-                        .toggleStyle(StateSwitchStyle(tint: green, labelHidden: true))
+                        .toggleStyle(StateSwitchStyle(tint: stateAccent, labelHidden: true))
                         .accessibilityLabel("Charge limits")
                         .disabled(model.saving || !model.helperCompatible)
                 }
                 Divider()
                 VStack(alignment: .leading, spacing: 8) {
-                    ChargeThresholdControl(title: "Resume at", value: model.draft(\.lower), range: 20...99, inputErrors: $model.inputErrors)
-                    ChargeThresholdControl(title: "Limit at", value: model.draft(\.upper), range: 21...100, inputErrors: $model.inputErrors)
+                    ChargeThresholdControl(accent: stateAccent, title: "Resume at", value: model.draft(\.lower), range: 20...99, inputErrors: $model.inputErrors)
+                    ChargeThresholdControl(accent: stateAccent, title: "Limit at", value: model.draft(\.upper), range: 21...100, inputErrors: $model.inputErrors)
                     Divider()
                     sleepBehavior
                 }
@@ -158,10 +163,10 @@ struct Panel: View {
         card {
             HStack(spacing: 16) {
                 Toggle("Start at login", isOn: Binding(get: { model.startAtLogin }, set: { model.setStartAtLogin($0) }))
-                    .toggleStyle(StateSwitchStyle(tint: green))
+                    .toggleStyle(StateSwitchStyle(tint: stateAccent))
                     .font(.caption).frame(maxWidth: .infinity)
                 HStack(spacing: 6) {
-                    Circle().fill(model.helperCompatible && model.status?.isCurrent == true ? Color.green : .orange)
+                    Circle().fill(model.helperCompatible && model.status?.isCurrent == true ? stateAccent : AppPalette.warning)
                         .frame(width: 6, height: 6)
                     Text("Helper").font(.caption)
                         .help(model.helperUpgrade.warning ?? (model.status?.isCurrent == true ? "Helper active" : "Helper needs attention"))
@@ -175,7 +180,9 @@ struct Panel: View {
                     }
                     if model.helperInstalled {
                         Button { showUninstall = true } label: {
-                            Image(systemName: "gearshape").frame(width: 24, height: 24)
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 16, weight: .medium))
+                                .frame(width: 30, height: 30)
                         }
                         .buttonStyle(.plain).accessibilityLabel("Helper settings")
                         .help("Manage the background helper").disabled(model.saving)
@@ -197,12 +204,12 @@ struct Panel: View {
             operationLabel(title: target != nil ? "Cancel discharge" : "Discharge to limit",
                 detail: target.map { "Running from battery to \($0)%." } ?? "Use battery power down to your saved limit.",
                 symbol: target != nil ? "stop.circle" : "battery.50", active: target != nil,
-                tint: target != nil ? .orange : green,
+                tint: stateAccent,
                 iconImage: target != nil ? nil : MenuBarBatteryIcon.image(
                     percent: model.sample?.percent, activity: .onBattery, tone: model.batteryTone,
                     appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!))
         }
-        .buttonStyle(OperationTileStyle(tint: target != nil ? .orange : green))
+        .buttonStyle(OperationTileStyle(tint: stateAccent))
         .help("Runs once to the saved limit. Cancels on sleep, heat, settings changes, after eight hours, or 30 minutes without progress. Keep the charger attached; adapter control can hide unplug detection.")
         .disabled(model.saving || !model.helperCompatible || (target == nil &&
             (model.sample?.externalPower != true || model.dischargePending || model.status?.dischargeSupported != true ||
@@ -217,9 +224,9 @@ struct Panel: View {
             operationLabel(title: calibrating ? "Cancel calibration" : "Calibrate",
                 detail: calibrating ? (model.status?.state ?? "Calibration in progress") : "Recheck charge readings. Takes several hours.",
                 symbol: calibrating ? "stop.circle" : "arrow.triangle.2.circlepath", active: calibrating,
-                tint: calibrating ? .orange : .cyan)
+                tint: stateAccent)
         }
-        .buttonStyle(OperationTileStyle(tint: calibrating ? .orange : .cyan))
+        .buttonStyle(OperationTileStyle(tint: stateAccent))
         .help("For inaccurate charge readings. Adds battery wear and does not restore lost capacity. Keep the lid open and charger connected.")
         .disabled(model.saving || !model.helperCompatible || (!calibrating &&
             (!model.protectionVerified || model.status?.dischargeTarget != nil || model.hasDraft || model.awaitingSettings)))
@@ -255,14 +262,14 @@ struct Panel: View {
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("Stay awake until charge limit", isOn: model.draft(\.keepAwakeUntilLimit))
                     .disabled(model.status?.sleepControlAvailable != true || !model.helperInstalled || model.saving)
-                    .font(.callout).toggleStyle(StateSwitchStyle(tint: green))
+                    .font(.callout).toggleStyle(StateSwitchStyle(tint: stateAccent))
                 Text(model.status?.sleepControlAvailable == true
                      ? "Allows lid-closed charging. Releases sleep at the limit or on unplug."
                      : "Update the helper to enable lid-closed charging.")
                     .font(.caption).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                     .help("Releases on heat/errors, after 8 hours, or after 30 minutes without charge progress. Restores only the system sleep setting acquired by this helper.")
                 if let message = model.status?.sleepMessage {
-                    Text(message).font(.caption).foregroundColor(model.status?.sleepHeld == true ? green : .orange)
+                    Text(message).font(.caption).foregroundColor(model.status?.sleepHeld == true ? stateAccent : AppPalette.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -301,7 +308,7 @@ struct Panel: View {
             Button("Discard changes") { model.discardChanges() }
                 .disabled((!model.hasDraft && model.inputErrors.isEmpty) || model.saving || model.awaitingSettings)
             Button(model.saving ? "Applying…" : "Save changes…") { model.save() }
-                .buttonStyle(StateActionStyle(tint: green))
+                .buttonStyle(StateActionStyle(tint: stateAccent))
                 .disabled(!model.helperCompatible || !model.helperInstalled || !model.hasDraft || model.saving || model.awaitingSettings || model.dischargePending)
         }.fixedSize()
     }
@@ -310,7 +317,7 @@ struct Panel: View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Color(NSColor.controlBackgroundColor)))
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(AppPalette.surface)))
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.07), lineWidth: 1))
             .shadow(color: .black.opacity(0.035), radius: 3, y: 2)
     }
@@ -330,7 +337,7 @@ struct OperationTileStyle: ButtonStyle {
                 colors: [tint.opacity(enabled && configuration.isPressed ? 0.18 : (enabled && hovered ? 0.12 : 0.05)), tint.opacity(0.015)],
                 startPoint: .topLeading, endPoint: .bottomTrailing)))
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor)))
+                .fill(Color(AppPalette.surface)))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
                 enabled && hovered ? tint.opacity(0.4) : Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1))
             .shadow(color: .black.opacity(enabled ? 0.04 : 0.015), radius: configuration.isPressed ? 1 : 4, y: configuration.isPressed ? 0 : 2)
@@ -351,21 +358,11 @@ struct StateSwitchStyle: ToggleStyle {
 
     /// Choose the higher-contrast endpoint using sRGB relative luminance.
     private func thumbColor(for track: Color) -> Color {
-        var luminance = 0.0
         let appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!
-        appearance.performAsCurrentDrawingAppearance {
-            if let rgb = NSColor(track).usingColorSpace(.sRGB) {
-                func linear(_ value: CGFloat) -> Double {
-                    let x = Double(value)
-                    return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
-                }
-                luminance = 0.2126 * linear(rgb.redComponent) + 0.7152 * linear(rgb.greenComponent) + 0.0722 * linear(rgb.blueComponent)
-            }
-        }
-        return luminance > 0.179 ? .black : .white
+        return Color(AppPalette.foreground(on: NSColor(track), appearance: appearance))
     }
     func makeBody(configuration: Configuration) -> some View {
-        let track = configuration.isOn ? tint : Color(white: 0.42)
+        let track = configuration.isOn ? tint : AppPalette.inactiveTrack
         return Button { configuration.isOn.toggle() } label: {
             HStack(spacing: 8) {
                 if !labelHidden {

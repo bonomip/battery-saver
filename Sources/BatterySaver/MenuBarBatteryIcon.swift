@@ -22,7 +22,7 @@ enum MenuBarBatteryIcon {
                         let interior = NSRect(x: 3, y: 5.5, width: 19, height: 7)
                         NSGraphicsContext.saveGraphicsState()
                         NSBezierPath(roundedRect: interior, xRadius: 1, yRadius: 1).addClip()
-                        color(tone).setFill()
+                        AppPalette(tone: tone).nativeAccent.setFill()
                         NSRect(x: interior.minX, y: interior.minY,
                                width: interior.width * fraction, height: interior.height).fill()
                         NSGraphicsContext.restoreGraphicsState()
@@ -42,7 +42,7 @@ enum MenuBarBatteryIcon {
                     bolt.line(to: NSPoint(x: 17, y: 10))
                     bolt.line(to: NSPoint(x: 13.5, y: 10))
                     bolt.close()
-                    NSColor.windowBackgroundColor.setStroke()
+                    AppPalette.windowBackground.setStroke()
                     bolt.lineWidth = 1.5
                     bolt.lineJoinStyle = .round
                     bolt.stroke()
@@ -58,17 +58,6 @@ enum MenuBarBatteryIcon {
     }
 
     static func outlineColor(appearance: NSAppearance) -> NSColor {
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .white : .black
-    }
-
-    static func color(_ tone: BatteryTone) -> NSColor {
-        switch tone {
-        case .green: return NSColor(srgbRed: 0.12, green: 0.61, blue: 0.43, alpha: 1)
-        case .blue: return NSColor(srgbRed: 0.16, green: 0.46, blue: 0.85, alpha: 1)
-        case .yellow: return NSColor(srgbRed: 0.82, green: 0.62, blue: 0.08, alpha: 1)
-        case .red: return .systemRed
-        case .neutral: return .labelColor
-        case .gray: return .systemGray
-        }
+        AppPalette.outline(appearance: appearance)
     }
 }

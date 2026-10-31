@@ -104,6 +104,7 @@ final class BatteryModel: ObservableObject {
         if status?.dischargeTarget != nil { return (sample?.percent ?? 100) < 15 ? .red : .yellow }
         return activity.tone(percent: sample?.percent)
     }
+    var palette: AppPalette { AppPalette(tone: batteryTone) }
     func startDischarge() {
         guard !dischargePending, !hasDraft, !awaitingSettings, !saving, let status = status, status.isCurrent,
               status.dischargeSupported, status.settings.enabled, !status.calibrationActive,
@@ -239,6 +240,7 @@ final class BatteryModel: ObservableObject {
 }
 
 struct ChargeThresholdControl: View {
+    let accent: Color
     let title: String
     @Binding var value: Int
     let range: ClosedRange<Int>
@@ -251,6 +253,7 @@ struct ChargeThresholdControl: View {
                 Slider(value: Binding(get: { Double(value) }, set: {
                     value = Int($0.rounded()); text = "\(value)"; inputErrors.remove(title)
                 }), in: Double(range.lowerBound)...Double(range.upperBound))
+                    .accentColor(accent).tint(accent)
                     .accessibilityLabel(title)
                 TextField(title, text: $text)
                     .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 48)
@@ -259,7 +262,7 @@ struct ChargeThresholdControl: View {
             }.padding(.vertical, 3)
             if inputErrors.contains(title) {
                 Text("Enter a whole number from \(range.lowerBound) to \(range.upperBound)%.")
-                    .font(.caption).foregroundColor(.red)
+                    .font(.caption).foregroundColor(AppPalette.error)
             }
         }
         .onAppear { text = "\(value)" }

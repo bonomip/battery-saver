@@ -26,12 +26,9 @@ final class QuickCardHost: NSHostingView<QuickCard> {
         updateCornerLayer()
     }
     private func updateCornerLayer() {
-        // Clip the complete surface once, at the display's actual pixel density.
+        // Native window framing owns clipping; these layers draw Easter egg overlays only.
         wantsLayer = true
-        layer?.cornerRadius = QuickCard.cornerRadius
-        layer?.cornerCurve = .circular
         layer?.borderWidth = 0
-        layer?.masksToBounds = true
         layer?.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         layer?.allowsEdgeAntialiasing = true
         guard let layer = layer else { return }
@@ -40,7 +37,7 @@ final class QuickCardHost: NSHostingView<QuickCard> {
         if borderGradient.superlayer !== layer {
             borderGradient.zPosition = 1000
             borderGradient.mask = borderMask
-            borderGradient.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.black.cgColor]
+            borderGradient.colors = [NSColor.clear.cgColor, NSColor.clear.cgColor, NSColor.clear.cgColor]
             layer.addSublayer(borderGradient)
 
         }
@@ -129,7 +126,7 @@ private struct DetailsActionSurface: NSViewRepresentable {
 struct QuickCard: View {
     @ObservedObject var model: BatteryModel
     static let width: CGFloat = 374
-    static let height: CGFloat = 258
+    static let height: CGFloat = 250
     static let cornerRadius: CGFloat = 14
     let openDetails: () -> Void
     @Environment(\.colorScheme) private var colorScheme
@@ -144,23 +141,20 @@ struct QuickCard: View {
         return "\(status.settings.upper)%"
     }
     private var accent: NSColor {
-        MenuBarBatteryIcon.color(model.batteryTone)
+        model.palette.nativeAccent
     }
     private var tint: Color { Color(accent) }
     private var badgeTextColor: Color {
-        switch model.batteryTone {
-        case .neutral: return Color(NSColor.windowBackgroundColor)
-        case .blue: return .white
-        default: return Color(red: 0.06, green: 0.14, blue: 0.13)
-        }
+        Color(AppPalette.foreground(on: accent,
+            appearance: NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)!))
     }
     private var borderColors: [NSColor] {
-        let edge = colorScheme == .dark ? NSColor.white.withAlphaComponent(0.15) : NSColor.black.withAlphaComponent(0.1)
-        return [edge, hovered ? accent.withAlphaComponent(0.55) : edge, edge]
+        guard easterEggs.aurora && easterEggs.auroraRequested else { return [.clear, .clear, .clear] }
+        return [accent.withAlphaComponent(0.2), accent, accent.withAlphaComponent(0.2)]
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Battery Saver").font(.system(size: 13, weight: .semibold))
                     .modifier(SecretChargeEasterEgg(effects: easterEggs))
@@ -170,12 +164,12 @@ struct QuickCard: View {
                     .overlay(DetailsActionSurface(action: openDetails))
                     .help("Settings and details")
                 if let warning = model.warning {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).help(warning)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(AppPalette.warning).help(warning)
                 }
             }
             HStack(spacing: 18) {
                 BatteryRing(model: model, size: 104, showsReading: !easterEggs.winking,
-                    accent: tint, track: Color.primary.opacity(0.1))
+                    track: Color.primary.opacity(0.1))
                     .modifier(BatteryRingEasterEgg(effects: easterEggs, tint: tint))
                 VStack(alignment: .leading, spacing: 10) {
                     Text(model.activity.title).font(.system(size: 12, weight: .semibold))
@@ -190,7 +184,9 @@ struct QuickCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            Divider().opacity(0.6)
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(AppPalette.surface)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
             HStack(spacing: 10) {
                 metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature", symbol: "thermometer")
                     .modifier(NightShiftEasterEgg(effects: easterEggs, tint: tint))
@@ -198,9 +194,10 @@ struct QuickCard: View {
             }
 
         }
-        .padding(.horizontal, 18).padding(.vertical, 14)
+        .padding(.horizontal, 18).padding(.vertical, 6)
         .frame(width: Self.width, height: Self.height)
-        .background(Color(NSColor.windowBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(AppPalette.windowBackground))
         .background(StatusMaterial(borderColors: borderColors, hovered: hovered, variant: borderVariant,
             animated: !reduceMotion, easterEggs: easterEggs,
             aurora: easterEggs.aurora && easterEggs.auroraRequested, boltID: easterEggs.boltID))
@@ -210,6 +207,7 @@ struct QuickCard: View {
             hovered = inside
         }
         .modifier(StatusEasterEggLifecycle(effects: easterEggs))
+        .ignoresSafeArea()
 
     }
 
@@ -228,8 +226,7 @@ struct QuickCard: View {
                 Text(value).font(.system(size: 17, weight: .semibold)).monospacedDigit()
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(colorScheme == .dark
-                ? Color.white.opacity(0.045) : Color.black.opacity(0.025)))
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(AppPalette.surface)))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
     }
 }
@@ -238,9 +235,8 @@ struct BatteryRing: View {
     @ObservedObject var model: BatteryModel
     let size: CGFloat
     var showsReading = true
-    var accent: Color? = nil
     var track: Color? = nil
-    private var tint: Color { accent ?? Color(MenuBarBatteryIcon.color(model.batteryTone)) }
+    private var tint: Color { model.palette.accent }
     var body: some View {
         ZStack {
             Circle().stroke(track ?? tint.opacity(0.13), lineWidth: size * 0.075)
