@@ -275,9 +275,9 @@ struct ChargeThresholdControl: View {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var item: NSStatusItem!
-    let statusPopover = NSPopover()
+    private var statusPanel: StatusPanel?
     private let statusDismissal = StatusDismissal()
     var settingsWindow: NSWindow?
     private var menuTracking = false
@@ -304,9 +304,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry); NSApp.mainMenu = mainMenu
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusPopover.behavior = .applicationDefined
-        statusPopover.animates = false
-        statusPopover.delegate = self
         item.button?.target = self
         item.button?.action = #selector(toggleStatus)
         model.onRefresh = { [weak self] in self?.update() }; update()
@@ -326,28 +323,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if button.toolTip != model.state { button.toolTip = model.state }
     }
     @objc func toggleStatus() {
-        if statusPopover.isShown { dismissStatus(); return }
-        guard let button = item.button else { return }
+        if statusPanel?.isVisible == true { dismissStatus(); return }
+        guard let button = item.button, let anchorWindow = button.window, let screen = anchorWindow.screen else { return }
         statusGeneration = UUID()
         menuTracking = true
         model.refresh(forcePublish: true)
         let host = QuickCardHost(rootView: QuickCard(model: model) { [weak self] in
-            self?.dismissStatus()
-            DispatchQueue.main.async { self?.openSettings() }
+            let pointer = NSEvent.mouseLocation
+            self?.dismissStatus(animated: false)
+            DispatchQueue.main.async { self?.openSettings(at: pointer) }
         })
         host.frame = NSRect(x: 0, y: 0, width: QuickCard.width, height: QuickCard.height)
-        let controller = NSViewController()
-        controller.view = host
-        statusPopover.contentViewController = controller
-        statusPopover.contentSize = host.frame.size
-        statusPopover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        host.window?.alphaValue = 1
-        host.window?.collectionBehavior = [.transient, .fullScreenAuxiliary]
+        let anchor = anchorWindow.convertToScreen(button.convert(button.bounds, to: nil))
+        let panel = makeStatusPanel(content: host, anchor: anchor, visibleFrame: screen.visibleFrame)
+        statusPanel = panel
         NSApp.activate(ignoringOtherApps: true)
-        host.window?.makeKey()
+        panel.makeKeyAndOrderFront(nil)
+        panel.invalidateShadow()
         statusDismissal.start(contains: { [weak self] event in
             guard let self = self else { return false }
-            if event.window === self.statusPopover.contentViewController?.view.window { return true }
+            if event.window === self.statusPanel { return true }
             if let button = self.item.button, event.window === button.window {
                 return button.bounds.contains(button.convert(event.locationInWindow, from: nil))
             }
@@ -360,29 +355,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             return !visible.isNull && visible.height >= rect.height * 0.5
         }, close: { [weak self] in self?.dismissStatus() })
     }
-    private func dismissStatus() {
-        guard statusPopover.isShown, !closingStatus else { return }
+    private func dismissStatus(animated: Bool = true) {
+        guard let panel = statusPanel, panel.isVisible, !closingStatus else { return }
         closingStatus = true
         statusDismissal.stop()
+        if !animated {
+            finishStatusDismissal()
+            return
+        }
         let generation = statusGeneration
-        fadeStatusWindow(statusPopover.contentViewController?.view.window,
+        fadeStatusWindow(panel,
                          reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) { [weak self] in
             guard let self = self, self.closingStatus, self.statusGeneration == generation else { return }
-            self.statusPopover.performClose(nil)
+            self.finishStatusDismissal()
         }
     }
-    func popoverDidClose(_ notification: Notification) {
+    private func finishStatusDismissal() {
+        statusPanel?.orderOut(nil)
+        statusPanel?.contentView = nil
+        statusPanel = nil
         closingStatus = false
-        statusPopover.contentViewController?.view.window?.alphaValue = 1
         statusDismissal.stop()
         menuTracking = false
-        statusPopover.contentViewController = nil
     }
     func windowWillClose(_ notification: Notification) {
         settingsWindow?.contentViewController = nil
         settingsWindow = nil
     }
-    @objc func openSettings() {
+    @objc func openSettings() { openSettings(at: NSEvent.mouseLocation) }
+    func openSettings(at pointer: NSPoint) {
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 740),
                                   styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
@@ -390,8 +391,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            window.contentViewController = NSHostingController(rootView: Panel(model: model))
-            window.center()
+            let host = NSHostingView(rootView: Panel(model: model))
+            host.frame.size = NSSize(width: 680, height: 740)
+            host.layoutSubtreeIfNeeded()
+            host.frame.size = host.fittingSize
+            let scroll = NSScrollView()
+            scroll.drawsBackground = false
+            scroll.hasVerticalScroller = true
+            scroll.autohidesScrollers = true
+            scroll.scrollerStyle = .overlay
+            scroll.documentView = host
+            window.contentView = scroll
+            window.setContentSize(host.frame.size)
+            let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) ?? NSScreen.main
+            if let screen = screen {
+                window.setFrame(settingsWindowFrame(size: window.frame.size, pointer: pointer,
+                    visibleFrame: screen.visibleFrame), display: false)
+            }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: host.isFlipped ? 0 : max(0, host.frame.height - scroll.contentSize.height)))
+            scroll.reflectScrolledClipView(scroll.contentView)
             settingsWindow = window
         }
         model.refresh(forcePublish: true)
@@ -406,6 +424,35 @@ if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--render-men
     do { try renderMenuIconPreview(to: URL(fileURLWithPath: CommandLine.arguments[2])) }
     catch { fputs("Icon preview failed: \(error.localizedDescription)\n", stderr); exit(1) }
     print("Rendered menu icon states without opening a window.")
+    exit(0)
+}
+if CommandLine.arguments.contains("--verify-window-placement") {
+    let screen = NSRect(x: 0, y: 0, width: 1440, height: 900)
+    let pointer = NSPoint(x: 720, y: 600)
+    let frame = settingsWindowFrame(size: NSSize(width: 680, height: 500), pointer: pointer, visibleFrame: screen)
+    precondition(abs(frame.midX - pointer.x) < 0.01)
+    precondition(abs(frame.maxY - pointer.y - frame.height * 0.25) < 0.01)
+    for screen in [screen, NSRect(x: -1440, y: -300, width: 1440, height: 900)] {
+        for point in [NSPoint(x: screen.minX, y: screen.minY), NSPoint(x: screen.maxX, y: screen.maxY)] {
+            for size in [NSSize(width: 680, height: 740), NSSize(width: 2000, height: 2000)] {
+                let placed = settingsWindowFrame(size: size, pointer: point, visibleFrame: screen)
+                precondition(screen.contains(placed))
+            }
+        }
+    }
+    for dark in [false, true] {
+        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+        let outline = MenuBarBatteryIcon.outlineColor(appearance: appearance).usingColorSpace(.sRGB)!
+        func luminance(_ value: CGFloat) -> Double {
+            let value = Double(value)
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        let foreground = luminance(outline.redComponent)
+        let background = luminance(dark ? 0.16 : 0.94)
+        let contrast = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+        precondition(contrast >= 7)
+    }
+    print("PASS: cursor anchor, screen-edge clamping, multiple screens, oversized frames, and light/dark outline contrast. No window displayed.")
     exit(0)
 }
 if CommandLine.arguments.contains("--verify-status-fade") {

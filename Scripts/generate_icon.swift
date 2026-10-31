@@ -19,28 +19,41 @@ func drawIcon(size: Int, destination: URL) throws {
     transform.concat()
 
     let tile = NSBezierPath(roundedRect: NSRect(x: 72, y: 72, width: 880, height: 880), xRadius: 198, yRadius: 198)
-    NSGradient(starting: NSColor(srgbRed: 0.22, green: 0.72, blue: 0.42, alpha: 1),
-               ending: NSColor(srgbRed: 0.05, green: 0.39, blue: 0.26, alpha: 1))!.draw(in: tile, angle: -90)
+    NSGradient(starting: NSColor(srgbRed: 0.10, green: 0.19, blue: 0.29, alpha: 1),
+               ending: NSColor(srgbRed: 0.035, green: 0.07, blue: 0.13, alpha: 1))!.draw(in: tile, angle: -90)
+    NSColor.white.withAlphaComponent(0.16).setStroke()
+    tile.lineWidth = 3
+    tile.stroke()
 
-    NSColor.white.setStroke()
-    let battery = NSBezierPath(roundedRect: NSRect(x: 218, y: 310, width: 548, height: 364), xRadius: 62, yRadius: 62)
-    battery.lineWidth = 38
+    let halo = NSBezierPath(ovalIn: NSRect(x: 180, y: 180, width: 664, height: 664))
+    NSColor(srgbRed: 0.25, green: 0.85, blue: 0.71, alpha: 0.13).setStroke()
+    halo.lineWidth = 28
+    halo.stroke()
+
+    let battery = NSBezierPath(roundedRect: NSRect(x: 210, y: 350, width: 560, height: 324), xRadius: 64, yRadius: 64)
+    NSColor.white.withAlphaComponent(0.94).setStroke()
+    battery.lineWidth = 28
     battery.stroke()
-    NSColor.white.setFill()
-    NSBezierPath(roundedRect: NSRect(x: 785, y: 422, width: 42, height: 140), xRadius: 15, yRadius: 15).fill()
+    NSColor.white.withAlphaComponent(0.94).setFill()
+    NSBezierPath(roundedRect: NSRect(x: 794, y: 452, width: 30, height: 120), xRadius: 13, yRadius: 13).fill()
 
-    let leaf = NSBezierPath()
-    leaf.move(to: NSPoint(x: 358, y: 390))
-    leaf.curve(to: NSPoint(x: 662, y: 606), controlPoint1: NSPoint(x: 280, y: 573), controlPoint2: NSPoint(x: 504, y: 638))
-    leaf.curve(to: NSPoint(x: 358, y: 390), controlPoint1: NSPoint(x: 659, y: 423), controlPoint2: NSPoint(x: 518, y: 341))
-    leaf.fill()
-    let vein = NSBezierPath()
-    vein.move(to: NSPoint(x: 346, y: 374))
-    vein.curve(to: NSPoint(x: 590, y: 550), controlPoint1: NSPoint(x: 409, y: 455), controlPoint2: NSPoint(x: 515, y: 478))
-    NSColor(srgbRed: 0.09, green: 0.46, blue: 0.29, alpha: 1).setStroke()
-    vein.lineWidth = 20
-    vein.lineCapStyle = .round
-    vein.stroke()
+    let fill = NSBezierPath(roundedRect: NSRect(x: 248, y: 388, width: 484, height: 248), xRadius: 36, yRadius: 36)
+    NSGradient(starting: NSColor(srgbRed: 0.24, green: 0.88, blue: 0.63, alpha: 1),
+               ending: NSColor(srgbRed: 0.08, green: 0.64, blue: 0.77, alpha: 1))!.draw(in: fill, angle: -35)
+    let bolt = NSBezierPath()
+    bolt.move(to: NSPoint(x: 542, y: 646))
+    bolt.line(to: NSPoint(x: 420, y: 492))
+    bolt.line(to: NSPoint(x: 491, y: 492))
+    bolt.line(to: NSPoint(x: 460, y: 378))
+    bolt.line(to: NSPoint(x: 592, y: 542))
+    bolt.line(to: NSPoint(x: 520, y: 542))
+    bolt.close()
+    NSColor(srgbRed: 0.04, green: 0.16, blue: 0.23, alpha: 0.35).setStroke()
+    bolt.lineWidth = 9
+    bolt.lineJoinStyle = .round
+    bolt.stroke()
+    NSColor.white.setFill()
+    bolt.fill()
     NSGraphicsContext.restoreGraphicsState()
     try bitmap.representation(using: .png, properties: [:])!.write(to: destination)
 }

@@ -16,12 +16,12 @@ func fadeStatusWindow(_ window: NSWindow?, reduceMotion: Bool, completion: @esca
         window.alphaValue = 0
         completion()
     }
-    let timer = Timer(timeInterval: 0.22, repeats: false) { _ in finish() }
+    let timer = Timer(timeInterval: 0.16, repeats: false) { _ in finish() }
     fallback = timer
     RunLoop.main.add(timer, forMode: .common)
     NSAnimationContext.runAnimationGroup({ context in
-        context.duration = 0.14
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        context.duration = 0.10
+        context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         window.animator().alphaValue = 0
     }, completionHandler: finish)
 }
