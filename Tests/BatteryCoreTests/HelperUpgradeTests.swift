@@ -13,16 +13,21 @@ final class HelperUpgradeTests: XCTestCase {
         XCTAssertEqual(HelperUpgrade.assess(installed: true, version: .current, runningVersion: old), .updateRequired)
     }
     func testNewerCompatibleHelperIsKeptAndIncompatibleDowngradesAreBlocked() {
-        let compatible = HelperVersion(revision: 3, protocolVersion: 1, settingsSchema: 1)
+        let current = HelperVersion.current
+        let compatible = HelperVersion(revision: current.revision + 1, protocolVersion: current.protocolVersion, settingsSchema: current.settingsSchema)
         XCTAssertEqual(HelperUpgrade.assess(installed: true, version: compatible, runningVersion: compatible), .ready)
-        for version in [HelperVersion(revision: 1, protocolVersion: 2, settingsSchema: 1),
-                        HelperVersion(revision: 3, protocolVersion: 2, settingsSchema: 1),
-                        HelperVersion(revision: 3, protocolVersion: 1, settingsSchema: 2),
+        for version in [HelperVersion(revision: 1, protocolVersion: current.protocolVersion + 1, settingsSchema: 1),
+                        HelperVersion(revision: current.revision, protocolVersion: current.protocolVersion + 1, settingsSchema: 1),
+                        HelperVersion(revision: current.revision, protocolVersion: current.protocolVersion, settingsSchema: current.settingsSchema + 1),
                         HelperVersion(revision: -1, protocolVersion: 1, settingsSchema: 1)] {
             guard case .blocked = HelperUpgrade.assess(installed: true, version: version, runningVersion: version) else {
                 XCTFail("Must block incompatible helper \(version)"); continue
             }
         }
+    }
+    func testStoppedOnDemandHelperNeedsSessionRatherThanReinstallation() {
+        XCTAssertEqual(HelperUpgrade.assess(installed: true, version: .current, runningVersion: nil), .starting)
+        XCTAssertEqual(HelperUpgrade.assess(installed: true, version: .current, runningVersion: .current), .ready)
     }
     func testAuthorizationCancellationCannotClaimSuccessfulUpgradeAndCanRetry() {
         var authorization = HelperUpdateAuthorization()

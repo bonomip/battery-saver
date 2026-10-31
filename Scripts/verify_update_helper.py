@@ -96,7 +96,7 @@ elif command == "--configure":
                     heatPause=float(sys.argv[5]), heatResume=float(sys.argv[6]),
                     keepAwakeUntilLimit=True, schemaVersion={version['settingsSchema']})
     Path({str(installed / 'settings.json')!r}).write_text(json.dumps(settings))
-elif command not in ("--probe", "--restore-sleep", "--restore", "--check-stopped"):
+elif command not in ("--probe", "--restore-sleep", "--restore", "--check-stopped", "--check-service"):
     sys.exit(2)
 ''').encode()
 

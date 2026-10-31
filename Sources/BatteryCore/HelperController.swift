@@ -126,6 +126,8 @@ public final class HelperController {
     public func stop() -> HelperStatus {
         running = false
         if let failure = ownershipFailure() { return yieldControl(failure) }
+        // Report the persisted preferences even when recovery precedes the first tick.
+        if let latest = try? readSettings() { settings = latest }
         session.cancelDischarge()
         session.cancelCalibration()
         do { try session.restore(); return status("Helper stopped · normal charging restored", allowed: true) }

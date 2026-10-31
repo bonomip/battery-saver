@@ -1,7 +1,9 @@
 # Battery Saver
 
-Native macOS menu bar app for battery monitoring and charge management. A separate
-privileged helper maintains charging policy when the app is closed.
+Native macOS menu bar app for battery monitoring and charge management. Its
+on-demand privileged helper runs while the app is open. Quit restores normal
+charging, releases sleep holds, and cancels calibration/discharge. Reopening
+reapplies saved preferences; one-off operations do not resume.
 
 ## Build and Run
 
@@ -56,6 +58,10 @@ source checkout, for example:
 sudo /bin/zsh "/path/to/Battery Saver.app/Contents/Resources/helper.sh" update
 ```
 
+Existing installations need one administrator-approved update for the app-linked
+lifecycle. Subsequent starts and quits need no administrator prompt. Connection
+loss also stops the helper; settings changes still require authorization.
+
 ### release.sh
 
 ```sh
@@ -102,7 +108,7 @@ flowchart TD
 
 Charging control uses undocumented firmware interfaces; gate readback does not
 prove physical charging behavior. Hardware and sleep behavior require manual
-acceptance. Avoid concurrent charging controllers. Quitting or deleting the app
-does not remove its helper; use the app or `helper.sh uninstall` first.
+acceptance. Avoid concurrent charging controllers. Quit stops the helper but keeps
+its installation and preferences; use the app or `helper.sh uninstall` to remove it.
 See [NOTICE.md](NOTICE.md) for protocol references and [ETIQUETTE.md](ETIQUETTE.md)
 for workspace rules.

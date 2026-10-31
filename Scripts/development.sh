@@ -39,7 +39,7 @@ cp Resources/Helper/*.sh "$app/Contents/Resources/Helper/"
 /usr/bin/plutil -lint "$app/Contents/Info.plist"
 print "Built ($configuration): $app"
 # Quit the previous UI so open cannot reuse an older running executable.
-# The installed helper continues running independently.
+# An updated helper restores charging when this UI connection closes, then restarts on demand.
 if /usr/bin/pgrep -x BatterySaver >/dev/null; then
     /usr/bin/pkill -x BatterySaver
     for attempt in {1..50}; do

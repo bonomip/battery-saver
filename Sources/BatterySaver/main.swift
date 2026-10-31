@@ -14,6 +14,10 @@ final class BatteryModel: ObservableObject {
     private var inspectedHelper = false
     private var installedHelperVersion: HelperVersion?
     private var updateAuthorization = HelperUpdateAuthorization()
+    let helperSession = HelperAppSession()
+    var helperRequiresLifecycleUpdate: Bool {
+        helperInstalled && (installedHelperVersion?.protocolVersion ?? 0) < 2
+    }
     var helperCompatible: Bool { helperUpgrade == .ready }
     @Published var saving = false
     @Published var dischargePending = false
@@ -35,6 +39,7 @@ final class BatteryModel: ObservableObject {
     var helperInstalled: Bool { FileManager.default.fileExists(atPath: Locations.helper) }
     var protectionVerified: Bool { helperCompatible && helperInstalled && sample != nil && status?.isCurrent == true && status?.settings.enabled == true }
     init() {
+        helperSession.onChange = { [weak self] in self?.refresh(forcePublish: true) }
         startAtLogin = LoginStartup().isEnabled(app: Bundle.main.bundleURL)
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
@@ -139,6 +144,7 @@ final class BatteryModel: ObservableObject {
     var state: String { activity.title }
     var warning: String? {
         if let error = error { return error }
+        if let error = helperSession.error { return error }
         if let message = helperUpgrade.warning { return message }
         if let readError = readError { return readError }
         guard helperInstalled else { return nil }
@@ -162,8 +168,14 @@ final class BatteryModel: ObservableObject {
             DispatchQueue.main.async {
                 self.installedHelperVersion = version
                 self.inspectedHelper = true
+                if let version = version, version.protocolVersion == HelperVersion.current.protocolVersion,
+                   version.revision >= HelperVersion.current.revision, version.settingsSchema <= HelperVersion.current.settingsSchema {
+                    self.helperSession.start { _ in
+                        self.refresh(forcePublish: true)
+                    }
+                }
                 self.refresh(forcePublish: true)
-                if offerUpdate && self.helperUpgrade == .updateRequired {
+                if offerUpdate && self.helperUpgrade == .updateRequired && self.helperRequiresLifecycleUpdate {
                     let alert = NSAlert()
                     alert.messageText = "Update Battery Saver’s background helper?"
                     alert.informativeText = "Update to helper revision \(HelperVersion.current.revision). Your settings will be preserved. macOS will ask for administrator authorization."
@@ -279,6 +291,7 @@ struct ChargeThresholdControl: View {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var quitting = false
     var item: NSStatusItem!
     private var statusPanel: StatusPanel?
     private let statusDismissal = StatusDismissal()
@@ -288,6 +301,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusGeneration = UUID()
     private var lastIconKey: String?
     let model = BatteryModel()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !quitting else { return .terminateLater }
+        if model.saving {
+            model.error = "Wait for the current helper operation to finish before quitting."
+            return .terminateCancel
+        }
+        if model.helperRequiresLifecycleUpdate {
+            let alert = NSAlert()
+            alert.messageText = "Update the helper before quitting"
+            alert.informativeText = "This installed helper runs independently. Update it once so Quit can restore normal charging and stop it while preserving your settings."
+            alert.addButton(withTitle: "Update helper")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn { model.updateHelper() }
+            return .terminateCancel
+        }
+        quitting = true
+        model.helperSession.stop { [weak self] error in
+            // AppKit must receive terminateLater before even an immediate stop reply.
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let error = error {
+                    self.quitting = false
+                    self.model.error = error
+                    let alert = NSAlert()
+                    alert.messageText = "Helper shutdown could not be confirmed"
+                    alert.informativeText = error + " Battery Saver will remain open."
+                    alert.runModal()
+                    sender.reply(toApplicationShouldTerminate: false)
+                    self.model.checkHelperCompatibility()
+                } else { sender.reply(toApplicationShouldTerminate: true) }
+            }
+        }
+        return .terminateLater
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         model.configureLoginStartup()

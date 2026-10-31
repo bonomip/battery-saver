@@ -85,7 +85,13 @@ final class Daemon {
         return output
     }
     func power(_ sleeping: Bool) { publish(sleeping ? controller.sleep() : controller.wake()) }
-    func run() throws {
+    func stop() -> HelperStatus {
+        timer?.invalidate()
+        let stopped = publish(controller.stop())
+        bs_power_stop()
+        return stopped
+    }
+    func start() throws {
         guard bs_power_start({ sleeping, context in
             guard let context = context else { return }
             Unmanaged<Daemon>.fromOpaque(context).takeUnretainedValue().power(sleeping != 0)
@@ -97,14 +103,13 @@ final class Daemon {
             signal(signalNumber, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
             source.setEventHandler { [self] in
-                let stopped = publish(controller.stop())
-                bs_power_stop(); exit(stopped.error == nil ? 0 : 1)
+                let stopped = stop()
+                exit(stopped.error == nil ? 0 : 1)
             }
             source.resume(); signals.append(source)
         }
         publish(controller.tick())
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [self] _ in publish(controller.tick()) }
-        RunLoop.main.run()
     }
 }
 
@@ -119,6 +124,10 @@ do {
         try checkRootDirectory()
         let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
         withExtendedLifetime(lock) { print("Helper control lock is released.") }
+    case "--check-service":
+        guard arguments.count == 1 else { throw SaverError("Usage: --check-service") }
+        try checkRootDirectory()
+        try checkSessionService()
     case "--migrate-settings":
         guard arguments.count == 2 else { throw SaverError("Usage: --migrate-settings path") }
         let data = try Data(contentsOf: URL(fileURLWithPath: arguments[1]))
@@ -147,7 +156,7 @@ do {
         // A second launch must never overwrite the live daemon's status.
         let lock = try ExclusiveFileLock(path: Locations.directory + "/daemon.lock")
         defer { withExtendedLifetime(lock) {} }
-        do { try Daemon().run() }
+        do { AppSessionService().run() }
         catch {
             try? writeJSON(HelperStatus(state: "Helper could not start", error: error.localizedDescription,
                                        settings: Settings(enabled: false), sample: nil, backend: "Unavailable",

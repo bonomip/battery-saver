@@ -39,6 +39,27 @@ private final class LifecycleEnvironment {
 }
 
 final class HelperControllerTests: XCTestCase {
+    func testQuitRestoresChargingAndRestartKeepsPreferencesWithoutResumingCalibration() {
+        let env = LifecycleEnvironment(); let hardware = LifecycleHardware()
+        env.settings = Settings(enabled: true, lower: 70, upper: 85, heatPause: 40, heatResume: 36, keepAwakeUntilLimit: false)
+        let saved = env.settings
+        let controller = env.controller(hardware)
+        _ = controller.tick()
+        env.command = CalibrationCommand(start: true)
+        XCTAssertTrue(controller.tick().calibrationActive)
+        let stopped = controller.stop()
+        XCTAssertNil(stopped.error)
+        XCTAssertFalse(stopped.running)
+        XCTAssertFalse(stopped.calibrationActive)
+        XCTAssertEqual(stopped.chargingAllowed, true)
+        XCTAssertEqual(stopped.settings, saved)
+        XCTAssertEqual(env.settings, saved)
+        XCTAssertEqual(hardware.operations.suffix(2), ["adapter:true", "charge:true"])
+        let restarted = env.controller(hardware).tick()
+        XCTAssertTrue(restarted.running)
+        XCTAssertFalse(restarted.calibrationActive)
+        XCTAssertEqual(restarted.settings, saved)
+    }
     func testWakeResumesInterruptedChargeInsideTheSailingRange() {
         let env = LifecycleEnvironment(); let hardware = LifecycleHardware()
         env.percent = 75

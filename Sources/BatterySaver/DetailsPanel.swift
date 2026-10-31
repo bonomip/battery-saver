@@ -85,7 +85,7 @@ struct Panel: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.primary)
                 .accessibilityLabel("Quit Battery Saver")
-                .help("Quit Battery Saver. The background helper keeps protecting your battery.")
+                .help("Quit Battery Saver, restore normal charging, and stop the helper. Your settings are kept.")
         }
     }
 

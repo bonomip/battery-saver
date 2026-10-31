@@ -108,16 +108,19 @@ cleanup() {
                 restored=0
             fi
         fi
+        if (( restored )) && [[ -f "$work/plist-original" ]]; then
+            /bin/cp -p "$work/plist-original" "$plist" || { result=1; preserve_work=1; restored=0; }
+        fi
         # Verify the previous version is running, including legacy versions without metadata.
         expected_revision=''
         /usr/bin/touch "$work/marker"
-        if (( ! restored )) || ! /bin/launchctl bootstrap system "$plist" || ! wait_status true 10; then
+        if (( ! restored )) || ! /bin/launchctl bootstrap system "$plist" || ! confirm_started; then
             print -u2 'Rollback could not restart the previous helper. Administrator intervention is required.'
             result=1; preserve_work=1
         fi
     fi
     if [[ -n "$work" ]] && (( ! preserve_work )); then
-        /bin/rm -f "$work/original" "$work/replacement" "$work/marker" "$work/settings-original" "$work/settings-rollback" "$work/migrated-settings"
+        /bin/rm -f "$work/original" "$work/replacement" "$work/marker" "$work/settings-original" "$work/settings-rollback" "$work/migrated-settings" "$work/plist-original"
         /bin/rmdir "$work" || result=1
     fi
     if (( locked )); then /bin/rmdir "$dir/.update-lock" || result=1; fi
@@ -132,6 +135,7 @@ locked=1
 /usr/bin/install -o root -g wheel -m 755 "$candidate" "$work/replacement"
 /usr/bin/codesign --verify --strict "$work/replacement"
 /bin/cp -p "$helper" "$work/original"
+/bin/cp -p "$plist" "$work/plist-original"
 
 # Require a new, successful daemon status rather than accepting stale JSON.
 wait_status() {
@@ -169,11 +173,29 @@ ensure_stopped() {
     return 1
 }
 
+confirm_started() {
+    local metadata protocol
+    metadata=$("$helper" --version-json 2>/dev/null) || metadata=''
+    protocol=$(version_field "$metadata" protocolVersion 2>/dev/null) || protocol=0
+    if [[ "$protocol" == <-> ]] && (( protocol >= 2 )); then
+        "$helper" --check-service
+    else
+        wait_status true 10
+    fi
+}
+
 /usr/bin/touch "$work/marker"
 # Mark before bootout so a partially successful stop also triggers recovery.
 stopped=1
+# An on-demand service may already have exited cleanly. Legacy daemons always
+# need a new stopped status; active sessions do too.
+already_stopped=0
+if (( ${installed_protocol:-0} >= 2 )) &&
+   [[ $(/usr/bin/plutil -extract running raw -o - "$status_path" 2>/dev/null) == false ]]; then
+    already_stopped=1
+fi
 /bin/launchctl bootout system "$plist"
-wait_status false 5
+if (( ! already_stopped )); then wait_status false 5; fi
 ensure_stopped || fail 'Helper did not release control; replacement refused.'
 # Capture the last settings written by the old daemon. Rollback restores these exact bytes.
 protected "$settings_path"
@@ -183,8 +205,9 @@ protected "$settings_path"
 settings_changed=1
 /bin/mv -f "$work/migrated-settings" "$settings_path"
 /bin/mv -f "$work/replacement" "$helper"
+/usr/bin/install -o root -g wheel -m 644 "$contents/Resources/local.paolo.battery-saver.plist" "$plist"
 /usr/bin/touch "$work/marker"
 /bin/launchctl bootstrap system "$plist"
-wait_status true 10
+confirm_started
 committed=1
-print 'Helper updated. Existing settings and calibration recovery files were preserved.'
+print 'Helper updated. Saved settings were preserved; the helper now follows the app.'

@@ -5,7 +5,7 @@ public struct HelperVersion: Codable, Equatable {
     public let revision: Int
     public let protocolVersion: Int
     public let settingsSchema: Int
-    public static let current = HelperVersion(revision: 2, protocolVersion: 1, settingsSchema: 1)
+    public static let current = HelperVersion(revision: 3, protocolVersion: 2, settingsSchema: 1)
     public init(revision: Int, protocolVersion: Int, settingsSchema: Int) {
         self.revision = revision; self.protocolVersion = protocolVersion; self.settingsSchema = settingsSchema
     }
@@ -16,7 +16,7 @@ public struct HelperVersion: Codable, Equatable {
 }
 
 public enum HelperUpgrade: Equatable {
-    case checking, missing, ready, updateRequired, blocked(String)
+    case checking, missing, starting, ready, updateRequired, blocked(String)
 
     public static func assess(installed: Bool, version: HelperVersion?, runningVersion: HelperVersion?) -> Self {
         guard installed else { return .missing }
@@ -32,6 +32,7 @@ public enum HelperUpgrade: Equatable {
         if version.revision < current.revision || version.protocolVersion != current.protocolVersion ||
             version.settingsSchema < current.settingsSchema { return .updateRequired }
         // A replaced file does not prove that launchd is running the replacement.
+        if runningVersion == nil && version == current { return .starting }
         guard let runningVersion = runningVersion, runningVersion == version else {
             if version.revision > current.revision {
                 return .blocked("The newer installed helper is not confirmed running. Use its matching app to repair it.")
@@ -44,6 +45,7 @@ public enum HelperUpgrade: Equatable {
     public var warning: String? {
         switch self {
         case .checking: return "Checking background helper compatibility…"
+        case .starting: return "Starting the on-demand helper…"
         case .updateRequired: return "Background helper update required. Open Settings & details to update; settings will be preserved."
         case .blocked(let message): return message
         case .missing, .ready: return nil

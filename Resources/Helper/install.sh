@@ -21,6 +21,11 @@ schema=$(print -r -- "$version" | /usr/bin/plutil -extract settingsSchema raw -o
 "$dir/battery-saver-helper" --configure 0 75 80 38 35
 /usr/bin/install -o root -g wheel -m 644 "$contents/Resources/local.paolo.battery-saver.plist" "$plist"
 /bin/launchctl bootstrap system "$plist"
+if (( protocol >= 2 )); then
+    "$dir/battery-saver-helper" --check-service
+    print 'Helper installed on demand with protection OFF. It follows the app; settings remain saved on Quit.'
+    exit 0
+fi
 # The directory was newly created, so any status file belongs to this install.
 for attempt in {1..50}; do
     status_path="$dir/status.json"
