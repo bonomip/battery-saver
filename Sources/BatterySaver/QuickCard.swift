@@ -10,6 +10,7 @@ final class DetailsActionButton: NSButton {
 final class QuickCardHost: NSHostingView<QuickCard> {
     private let borderGradient = CAGradientLayer()
     private let borderMask = CAShapeLayer()
+    let easterEggs = NativeStatusEasterEggs()
     override func layout() {
         super.layout()
         updateCornerLayer()
@@ -18,6 +19,7 @@ final class QuickCardHost: NSHostingView<QuickCard> {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateCornerLayer()
+        easterEggs.windowChanged(window)
     }
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
@@ -40,11 +42,13 @@ final class QuickCardHost: NSHostingView<QuickCard> {
             borderGradient.mask = borderMask
             borderGradient.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.black.cgColor]
             layer.addSublayer(borderGradient)
+
         }
         borderGradient.frame = bounds
         borderGradient.contentsScale = layer.contentsScale
         borderMask.frame = borderGradient.bounds
         borderMask.contentsScale = layer.contentsScale
+        easterEggs.layout(in: layer, borderGradient: borderGradient)
         borderMask.fillColor = NSColor.clear.cgColor
         borderMask.strokeColor = NSColor.white.cgColor
         borderMask.lineWidth = 2
@@ -70,14 +74,17 @@ final class QuickCardHost: NSHostingView<QuickCard> {
         borderGradient.startPoint = start
         borderGradient.endPoint = end
         CATransaction.commit()
-        borderGradient.removeAllAnimations()
+        borderGradient.removeAnimation(forKey: "statusBorderHover")
         if animated {
             let colors = CABasicAnimation(keyPath: "colors")
             colors.fromValue = previousColors; colors.toValue = target
+            colors.duration = 0.22
             let startPoint = CABasicAnimation(keyPath: "startPoint")
             startPoint.fromValue = NSValue(point: previousStart); startPoint.toValue = NSValue(point: start)
+            startPoint.duration = 0.22
             let endPoint = CABasicAnimation(keyPath: "endPoint")
             endPoint.fromValue = NSValue(point: previousEnd); endPoint.toValue = NSValue(point: end)
+            endPoint.duration = 0.22
             let group = CAAnimationGroup()
             group.animations = [colors, startPoint, endPoint]
             group.duration = 0.22
@@ -129,6 +136,7 @@ struct QuickCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     @State private var borderVariant = 0
+    @StateObject private var easterEggs = StatusEasterEggs()
 
     private var limit: String {
         guard let status = model.status, status.isCurrent else { return model.helperInstalled ? "—" : "Off" }
@@ -150,6 +158,7 @@ struct QuickCard: View {
             HStack {
                 Image(systemName: "battery.75").foregroundColor(tint)
                 Text("Battery Saver").font(.system(size: 13, weight: .semibold))
+                    .modifier(SecretChargeEasterEgg(effects: easterEggs))
                 Spacer()
                 Image(systemName: "gearshape").font(.system(size: 16, weight: .medium))
                     .frame(width: 30, height: 30)
@@ -160,7 +169,8 @@ struct QuickCard: View {
                 }
             }
             HStack(spacing: 18) {
-                BatteryRing(model: model, size: 96)
+                BatteryRing(model: model, size: 96, showsReading: !easterEggs.winking)
+                    .modifier(BatteryRingEasterEgg(effects: easterEggs, tint: tint))
                 VStack(alignment: .leading, spacing: 10) {
                     Text(model.activity.title).font(.system(size: 12, weight: .semibold))
                         .lineLimit(1).fixedSize(horizontal: true, vertical: false)
@@ -174,17 +184,22 @@ struct QuickCard: View {
             }
             HStack(spacing: 10) {
                 metric(model.sample.map { String(format: "%.1f°C", $0.temperature) } ?? "—", label: "Temperature")
+                    .modifier(NightShiftEasterEgg(effects: easterEggs, tint: tint))
                 metric(limit, label: "Charge limit")
             }
 
         }
         .padding(18).frame(width: Self.width, height: Self.height)
         .background(LinearGradient(colors: [tint.opacity(colorScheme == .dark ? 0.25 : 0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
-        .background(StatusMaterial(borderColors: borderColors, hovered: hovered, variant: borderVariant, animated: !reduceMotion))
+        .background(StatusMaterial(borderColors: borderColors, hovered: hovered, variant: borderVariant,
+            animated: !reduceMotion, easterEggs: easterEggs,
+            aurora: easterEggs.aurora && easterEggs.auroraRequested, boltID: easterEggs.boltID))
         .onHover { inside in
             if inside && !hovered { borderVariant = (borderVariant + Int.random(in: 1...7)) % 8 }
+            easterEggs.hoverChanged(inside)
             hovered = inside
         }
+        .modifier(StatusEasterEggLifecycle(effects: easterEggs))
 
     }
 
@@ -208,6 +223,7 @@ struct QuickCard: View {
 struct BatteryRing: View {
     @ObservedObject var model: BatteryModel
     let size: CGFloat
+    var showsReading = true
     private var tint: Color { Color(MenuBarBatteryIcon.color(model.batteryTone)) }
     var body: some View {
         ZStack {
@@ -215,8 +231,10 @@ struct BatteryRing: View {
             Circle().trim(from: 0, to: CGFloat(min(100, max(0, model.sample?.percent ?? 0))) / 100)
                 .stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-            Text(model.sample.map { "\($0.percent)%" } ?? "—")
-                .font(.system(size: size * 0.25, weight: .semibold, design: .rounded)).monospacedDigit()
+            if showsReading {
+                Text(model.sample.map { "\($0.percent)%" } ?? "—")
+                    .font(.system(size: size * 0.25, weight: .semibold, design: .rounded)).monospacedDigit()
+            }
         }.padding(size * 0.05).frame(width: size, height: size)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(model.sample.map { "Battery \($0.percent) percent" } ?? "Battery unavailable")
@@ -228,6 +246,10 @@ private struct StatusMaterial: NSViewRepresentable {
     let hovered: Bool
     let variant: Int
     let animated: Bool
+    let easterEggs: StatusEasterEggs
+    // Explicit trigger values invalidate the bridge immediately, independently of hover changes.
+    let aurora: Bool
+    let boltID: Int
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.material = .popover
@@ -236,6 +258,9 @@ private struct StatusMaterial: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        (view.window?.contentView as? QuickCardHost)?.setBorder(colors: borderColors, hovered: hovered, variant: variant, animated: animated)
+        guard let host = view.window?.contentView as? QuickCardHost else { return }
+        host.easterEggs.optionChanged = { [weak effects = easterEggs] in effects?.setOption($0) }
+        host.setBorder(colors: borderColors, hovered: hovered, variant: variant, animated: animated)
+        host.easterEggs.update(aurora: aurora, boltID: boltID, reduceMotion: !animated)
     }
 }
